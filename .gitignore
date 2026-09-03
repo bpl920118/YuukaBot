@@ -1,0 +1,7 @@
+storage/images/*
+!storage/images/.gitkeep
+.env
+.venv/
+__pycache__/
+*.db
+*.pyc
