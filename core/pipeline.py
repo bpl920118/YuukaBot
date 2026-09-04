@@ -12,6 +12,15 @@ from clients.llm import LlmClient
 from db.repository import Repository
 
 
+def _user_message_payload(display_name: str, text: str) -> str:
+    name = (display_name or "未知").strip() or "未知"
+    body = text if text.strip() else "（只呼叫了你）"
+    return (
+        f"發言者暱稱：{name}（僅辨識用，不是對話內容）\n"
+        f"訊息：{body}"
+    )
+
+
 class ChatPipeline:
     def __init__(
         self,
@@ -61,13 +70,25 @@ class ChatPipeline:
         messages = []
         for m in history:
             if m.role == "user":
-                prefix = f"[{m.display_name or m.user_id}] "
-                messages.append({"role": "user", "content": prefix + m.content})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": _user_message_payload(
+                            m.display_name or str(m.user_id), m.content
+                        ),
+                    }
+                )
             else:
                 messages.append({"role": "assistant", "content": m.content})
 
-        user_payload = f"[{display_name}] {text}" if text.strip() else f"[{display_name}] （只呼叫了你）"
-        messages.append({"role": "user", "content": user_payload})
+        messages.append(
+            {
+                "role": "user",
+                "content": _user_message_payload(
+                    display_name, text if text.strip() else "（只呼叫了你）"
+                ),
+            }
+        )
 
         system = build_runtime_system(
             self.base_prompt,
