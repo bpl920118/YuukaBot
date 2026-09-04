@@ -14,7 +14,14 @@ from core.schemas import LlmChatResult, is_soft_fallback, soft_fallback_reply
 
 logger = logging.getLogger(__name__)
 
-_PARSE_FALLBACK = "……計算機好像跳了一下。再說一次好嗎？"
+_PARSE_FALLBACK = (
+    "（敲了兩下計算機）……剛才那則我沒讀完整。老師再說一次？"
+    "我聽著——審核先暫停一下。"
+)
+_AUTH_FALLBACK = (
+    "……計算機連不上帳本伺服器：API 金鑰無效或過期（HTTP 401）。"
+    "請檢查 `.env` 的 `DEEPSEEK_API_KEY` 後重啟 bot。"
+)
 _RETRY_NUDGE = (
     "[系統] 上一則輸出無效。請重新只輸出合法 JSON；"
     "reply 必須是繁體中文、至少兩個字、且不得與上一則對白相同。"
@@ -56,7 +63,7 @@ def _salvage_reply_field(raw: str) -> dict[str, Any] | None:
     if len(reply) < 2:
         return None
     return {
-        "reply": reply[:500],
+        "reply": reply[:1500],
         "emotion": "neutral",
         "trigger_cg": False,
         "cg_tier": "none",
@@ -129,11 +136,23 @@ class LlmClient:
         timeout = 180.0 if use_depth != "off" else 90.0
 
         last_raw = ""
+        auth_failed = False
         working_messages = list(payload["messages"])
         for attempt in range(3):
             attempt_payload = {**payload, "messages": working_messages}
             try:
                 last_raw = await self._post_once(url, headers, attempt_payload, timeout)
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code if exc.response is not None else 0
+                logger.warning("LLM HTTP attempt %s failed: %s", attempt + 1, exc)
+                if status in {401, 403}:
+                    auth_failed = True
+                    break
+                working_messages = [
+                    *payload["messages"],
+                    {"role": "user", "content": _RETRY_NUDGE},
+                ]
+                continue
             except Exception as exc:
                 logger.warning("LLM HTTP attempt %s failed: %s", attempt + 1, exc)
                 working_messages = [
@@ -176,8 +195,14 @@ class LlmClient:
                 continue
 
         # Local soft fallback — avoid hammering API or looping "計算機跳了".
-        logger.error("LLM soft-fallback after retries; last_raw=%r", (last_raw or "")[:200])
-        fallback = soft_fallback_reply(hash(last_raw or last_reply or "") & 0xFFFF)
+        logger.error(
+            "LLM soft-fallback after retries; auth_failed=%s last_raw=%r",
+            auth_failed,
+            (last_raw or "")[:200],
+        )
+        fallback = _AUTH_FALLBACK if auth_failed else soft_fallback_reply(
+            hash(last_raw or last_reply or "") & 0xFFFF
+        )
         return json.dumps(
             {
                 "reply": fallback,
@@ -232,7 +257,7 @@ class LlmClient:
                     pass
             text = (raw or "").strip()
             if text and not text.startswith("{"):
-                return LlmChatResult(reply=text[:500], emotion="neutral")
+                return LlmChatResult(reply=text[:1500], emotion="neutral")
             return LlmChatResult(reply=_PARSE_FALLBACK, emotion="flustered")
 
     @staticmethod

@@ -20,12 +20,13 @@ def test_soft_fallback_is_warmer_and_detectable() -> None:
 
 def test_guardrails_and_prompt_warmth() -> None:
     assert "不要趕人走" in OUTPUT_GUARDRAILS
+    assert "寧長勿薄" in OUTPUT_GUARDRAILS
     with open("characters/yuuka-system-prompt.txt", encoding="utf-8") as f:
         card = f.read()
     sys = build_runtime_system(card)
     assert "嘴硬心軟" in sys
     assert "課金" in sys
-
+    assert "寧長勿薄" in card or "80～220" in card
 
 def test_salvage_broken_json_reply() -> None:
     raw = '{"reply": "（抬眼）又想課金？先報金額。", "emotion": "angry",'
