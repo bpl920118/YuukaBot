@@ -8,7 +8,8 @@ from typing import Any
 import httpx
 
 from config import get_settings
-from core.llm_options import resolve_depth, resolve_model
+from core.llm_options import resolve_depth
+from core.providers import chat_completions_url, resolve_model_name, supports_thinking
 from core.schemas import LlmChatResult, is_soft_fallback, soft_fallback_reply
 
 
@@ -19,8 +20,8 @@ _PARSE_FALLBACK = (
     "我聽著——審核先暫停一下。"
 )
 _AUTH_FALLBACK = (
-    "……計算機連不上帳本伺服器：API 金鑰無效或過期（HTTP 401）。"
-    "請檢查 `.env` 的 `DEEPSEEK_API_KEY` 後重啟 bot。"
+    "……計算機連不上帳本伺服器：API 金鑰無效或過期（HTTP 401／403）。"
+    "請用 `/api status` 檢查網址與金鑰，或改 `/api preset`。"
 )
 _RETRY_NUDGE = (
     "[系統] 上一則輸出無效。請重新只輸出合法 JSON；"
@@ -72,6 +73,45 @@ def _salvage_reply_field(raw: str) -> dict[str, Any] | None:
     }
 
 
+def _parts_to_text(content: object) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        chunks: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                chunks.append(part)
+            elif isinstance(part, dict):
+                text = part.get("text") or part.get("content")
+                if isinstance(text, str):
+                    chunks.append(text)
+        return "".join(chunks).strip()
+    return ""
+
+
+def _coerce_message_text(message: dict[str, Any]) -> str:
+    """
+    Prefer message.content. DeepSeek thinking mode often leaves content empty
+    and spends the token budget on reasoning_content (finish_reason=length).
+    """
+    content = _parts_to_text(message.get("content"))
+    if content:
+        return content
+
+    for key in ("reasoning_content", "reasoning"):
+        reasoning = _parts_to_text(message.get(key))
+        if not reasoning:
+            continue
+        salvaged = _salvage_reply_field(reasoning)
+        if salvaged:
+            logger.info("LLM salvaged reply from %s", key)
+            return json.dumps(salvaged, ensure_ascii=False)
+        stripped = reasoning.strip()
+        if stripped.startswith("{") and '"reply"' in stripped:
+            return stripped
+    return ""
+
+
 class LlmClient:
     def __init__(self) -> None:
         s = get_settings()
@@ -88,11 +128,17 @@ class LlmClient:
         model: str | None = None,
         depth: str | None = None,
         last_reply: str | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
     ) -> str:
-        if not self.api_key:
+        use_key = ((api_key if api_key is not None else self.api_key) or "").strip()
+        use_base = ((base_url if base_url is not None else self.base_url) or "").strip().rstrip(
+            "/"
+        ) or self.base_url
+        if not use_key:
             return json.dumps(
                 {
-                    "reply": "老師……API 金鑰還沒設定，但我先在這裡應答。請把帳目補上。",
+                    "reply": "老師……API 金鑰還沒設定，但我先在這裡應答。請用 `/api key` 或填 `.env`。",
                     "emotion": "neutral",
                     "trigger_cg": False,
                     "cg_tier": "none",
@@ -102,9 +148,10 @@ class LlmClient:
                 ensure_ascii=False,
             )
 
-        use_model = resolve_model(model, self.model)
+        use_model = resolve_model_name(model, self.model, base_url=use_base)
         use_depth = resolve_depth(depth, self.depth)
         settings = get_settings()
+        thinking_ok = supports_thinking(use_base)
 
         # Soft-fallback lines in memory must not trigger near-duplicate rejection.
         effective_last = (
@@ -118,28 +165,43 @@ class LlmClient:
             "messages": [{"role": "system", "content": system}, *messages],
             "max_tokens": settings.llm_max_tokens,
             "response_format": {"type": "json_object"},
+            "temperature": settings.llm_temperature,
+            "top_p": settings.llm_top_p,
         }
-        # Sampling only applies when thinking is off (Flash casual chat).
-        if use_depth == "off":
-            payload["thinking"] = {"type": "disabled"}
-            payload["temperature"] = settings.llm_temperature
-            payload["top_p"] = settings.llm_top_p
-        else:
-            payload["thinking"] = {"type": "enabled"}
-            payload["reasoning_effort"] = use_depth  # high | max
+        # DeepSeek-only thinking fields — other gateways may reject unknown keys.
+        thinking_on = thinking_ok and use_depth != "off"
+        if thinking_ok:
+            if thinking_on:
+                payload["max_tokens"] = max(settings.llm_max_tokens, 768) + 2048
+                payload["thinking"] = {"type": "enabled"}
+                payload["reasoning_effort"] = use_depth  # high | max
+                payload.pop("temperature", None)
+                payload.pop("top_p", None)
+            else:
+                payload["thinking"] = {"type": "disabled"}
 
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {use_key}",
             "Content-Type": "application/json",
         }
-        url = f"{self.base_url}/v1/chat/completions"
-        timeout = 180.0 if use_depth != "off" else 90.0
+        url = chat_completions_url(use_base)
+        timeout = 180.0 if thinking_on else 90.0
 
         last_raw = ""
         auth_failed = False
         working_messages = list(payload["messages"])
-        for attempt in range(3):
+        forced_no_think = False
+        for attempt in range(4):
             attempt_payload = {**payload, "messages": working_messages}
+            if forced_no_think and thinking_ok:
+                attempt_payload = {
+                    **attempt_payload,
+                    "thinking": {"type": "disabled"},
+                    "max_tokens": settings.llm_max_tokens,
+                    "temperature": settings.llm_temperature,
+                    "top_p": settings.llm_top_p,
+                }
+                attempt_payload.pop("reasoning_effort", None)
             try:
                 last_raw = await self._post_once(url, headers, attempt_payload, timeout)
             except httpx.HTTPStatusError as exc:
@@ -162,6 +224,11 @@ class LlmClient:
                 continue
             if not (last_raw or "").strip():
                 logger.warning("LLM empty content on attempt %s", attempt + 1)
+                # Thinking ate the token budget → one hard retry with thinking off.
+                if thinking_on and not forced_no_think:
+                    forced_no_think = True
+                    logger.warning("LLM retrying with thinking disabled after empty content")
+                    continue
                 working_messages = [
                     *payload["messages"],
                     {"role": "user", "content": _RETRY_NUDGE},
@@ -187,6 +254,10 @@ class LlmClient:
                     except Exception:
                         pass
                 logger.warning("LLM parse attempt %s failed: %s", attempt + 1, exc)
+                if thinking_on and not forced_no_think:
+                    forced_no_think = True
+                    logger.warning("LLM retrying with thinking disabled after parse failure")
+                    continue
                 working_messages = [
                     *payload["messages"],
                     {"role": "assistant", "content": last_raw[:800]},
@@ -226,25 +297,15 @@ class LlmClient:
             resp = await client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
             data = resp.json()
-        message = data["choices"][0]["message"]
-        content = message.get("content")
-        if isinstance(content, str) and content.strip():
-            return content
-        # Some gateways return content as a list of text parts.
-        if isinstance(content, list):
-            chunks: list[str] = []
-            for part in content:
-                if isinstance(part, str):
-                    chunks.append(part)
-                elif isinstance(part, dict):
-                    text = part.get("text") or part.get("content")
-                    if isinstance(text, str):
-                        chunks.append(text)
-            joined = "".join(chunks).strip()
-            if joined:
-                return joined
-        return ""
-
+        choice = (data.get("choices") or [{}])[0]
+        message = choice.get("message") or {}
+        text = _coerce_message_text(message if isinstance(message, dict) else {})
+        if not text:
+            logger.warning(
+                "LLM blank message fields; finish_reason=%r",
+                choice.get("finish_reason"),
+            )
+        return text
     def parse_result(self, raw: str) -> LlmChatResult:
         try:
             return LlmChatResult.model_validate(self._extract_json(raw))

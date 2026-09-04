@@ -82,10 +82,13 @@ class GuildSetting(Base):
     work_mode: Mapped[int] = mapped_column(Integer, default=0)  # 0=RP, 1=assistant
     extra_layers: Mapped[str] = mapped_column(Text, default="")  # teacher overlay notes
     # Empty => fall back to .env / config defaults. Teacher-only via /model /depth.
-    llm_model: Mapped[str] = mapped_column(String(64), default="")
+    llm_model: Mapped[str] = mapped_column(String(128), default="")
     llm_depth: Mapped[str] = mapped_column(String(16), default="")  # off|high|max
     # 0/1 — inject DeepSeek V4 role-immersion marker when thinking is on.
     llm_immersion: Mapped[int] = mapped_column(Integer, default=0)
+    # OpenAI-compatible override (empty => .env DEEPSEEK_*). Teacher via /api.
+    llm_api_base_url: Mapped[str] = mapped_column(String(256), default="")
+    llm_api_key: Mapped[str] = mapped_column(Text, default="")
     # Empty => fall back to env SD_WEBUI_URL. Teacher-only via /image url.
     sd_webui_url: Mapped[str] = mapped_column(String(256), default="")
     # Shared-guild affection needed before auto CG (teacher sets via /score threshold).

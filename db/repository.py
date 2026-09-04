@@ -313,3 +313,13 @@ def _ensure_guild_settings_llm_columns(sync_conn) -> None:
                 "ALTER TABLE guild_settings ADD COLUMN cg_score_threshold INTEGER DEFAULT 30"
             )
         )
+    if "llm_api_base_url" not in cols:
+        sync_conn.execute(
+            text(
+                "ALTER TABLE guild_settings ADD COLUMN llm_api_base_url VARCHAR(256) DEFAULT ''"
+            )
+        )
+    if "llm_api_key" not in cols:
+        sync_conn.execute(
+            text("ALTER TABLE guild_settings ADD COLUMN llm_api_key TEXT DEFAULT ''")
+        )

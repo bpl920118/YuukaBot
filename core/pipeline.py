@@ -17,11 +17,32 @@ from core.character import (
     match_storyline,
 )
 from core.immersion import apply_immersion_marker
-from core.llm_options import parse_depth_arg, parse_model_arg, resolve_depth, resolve_model
+from core.llm_options import parse_depth_arg, parse_model_arg, resolve_depth
+from core.providers import (
+    PRESETS,
+    detect_provider,
+    get_preset,
+    mask_api_key,
+    normalize_base_url,
+    resolve_model_name,
+    supports_thinking,
+)
 from core.scoring import AffectionScorer
 from clients.webui import WebuiClient, normalize_webui_url
 from clients.llm import LlmClient, is_near_duplicate
 from db.repository import Repository
+
+
+def _resolve_guild_endpoint(guild_settings, settings) -> tuple[str, str, str]:
+    """Return (base_url, api_key, model) for this guild (.env as fallback)."""
+    base = (guild_settings.llm_api_base_url or "").strip() or settings.deepseek_base_url
+    key = (guild_settings.llm_api_key or "").strip() or settings.deepseek_api_key
+    model = resolve_model_name(
+        guild_settings.llm_model,
+        settings.deepseek_model,
+        base_url=base,
+    )
+    return base.rstrip("/"), key, model
 
 
 def _speaker_label(user_id: int | None) -> str:
@@ -133,10 +154,12 @@ class ChatPipeline:
             lore=lore_blocks,
         )
 
-        model = resolve_model(guild_settings.llm_model, settings.deepseek_model)
         depth = resolve_depth(guild_settings.llm_depth, settings.deepseek_depth)
         # Official V4 immersion marker: only when toggled on + thinking enabled.
-        if bool(guild_settings.llm_immersion) and depth != "off":
+        base_url, api_key, model = _resolve_guild_endpoint(guild_settings, settings)
+        if bool(guild_settings.llm_immersion) and depth != "off" and supports_thinking(
+            base_url
+        ):
             apply_immersion_marker(messages)
         raw = await self.llm.chat(
             system=system,
@@ -144,6 +167,8 @@ class ChatPipeline:
             model=model,
             depth=depth,
             last_reply=last_assistant_reply or None,
+            api_key=api_key,
+            base_url=base_url,
         )
         result = self.llm.parse_result(raw)
         result.reply = scrub_score_leak(result.reply)
@@ -291,7 +316,11 @@ class ChatPipeline:
         image_prompt = result.image_prompt
         scene_dump = result.cg_scene.model_dump() if result.cg_scene else None
         if not self._has_cg_keywords(result):
-            image_prompt = await self._infer_image_prompt(messages, result.reply)
+            image_prompt = await self._infer_image_prompt(
+                messages,
+                result.reply,
+                guild_settings=guild_settings,
+            )
             scene_dump = None
         if not (image_prompt or "").strip() and not scene_dump:
             # Last-resort visual beat from emotion / reply.
@@ -316,7 +345,11 @@ class ChatPipeline:
         }
 
     async def _infer_image_prompt(
-        self, messages: list[dict[str, str]], reply: str
+        self,
+        messages: list[dict[str, str]],
+        reply: str,
+        *,
+        guild_settings=None,
     ) -> str | None:
         """Ask LLM for English SD tags from recent dialogue + this reply."""
         snippet = []
@@ -332,6 +365,12 @@ class ChatPipeline:
             '"cg_scene":null,"image_prompt":"english danbooru tags for the latest Yuuka beat"}。'
             "image_prompt 必須是英文短標籤，對應對話最後畫面；禁止中文、禁止 NSFW、禁止解釋。"
         )
+        settings = get_settings()
+        api_key = None
+        base_url = None
+        model = None
+        if guild_settings is not None:
+            base_url, api_key, model = _resolve_guild_endpoint(guild_settings, settings)
         try:
             raw = await self.llm.chat(
                 system=system,
@@ -342,6 +381,9 @@ class ChatPipeline:
                     }
                 ],
                 depth="off",
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
             )
             parsed = self.llm.parse_result(raw)
             if parsed.image_prompt:
@@ -504,26 +546,132 @@ class ChatPipeline:
     async def describe_llm(self, guild_id: int) -> str:
         settings = get_settings()
         guild_settings = await self.repo.get_or_create_settings(guild_id)
-        model = resolve_model(guild_settings.llm_model, settings.deepseek_model)
+        base_url, api_key, model = _resolve_guild_endpoint(guild_settings, settings)
         depth = resolve_depth(guild_settings.llm_depth, settings.deepseek_depth)
         immersion = "開" if guild_settings.llm_immersion else "關"
+        provider = detect_provider(base_url)
+        override = "伺服器覆寫" if (
+            (guild_settings.llm_api_base_url or "").strip()
+            or (guild_settings.llm_api_key or "").strip()
+        ) else ".env 預設"
         note = ""
-        if guild_settings.llm_immersion and depth == "off":
-            note = "\n⚠ 沉浸已開但深度是 `off`，官方沉浸指令不會生效；請用 `/depth` 切 `high` 或 `max`。"
+        if guild_settings.llm_immersion and (
+            depth == "off" or not supports_thinking(base_url)
+        ):
+            note = (
+                "\n⚠ 沉浸需 DeepSeek + depth≠off 才會注入；"
+                f"目前 provider=`{provider}` depth=`{depth}`。"
+            )
         return (
-            f"目前模型=`{model}`，深度=`{depth}`，角色沉浸=`{immersion}`。\n"
-            "可用：`/model`、`/depth`、`/immersion`。"
+            f"provider=`{provider}`（{override}）\n"
+            f"base=`{base_url}`\n"
+            f"key=`{mask_api_key(api_key)}`\n"
+            f"model=`{model}` depth=`{depth}` 沉浸=`{immersion}`\n"
+            "可用：`/api`、`/model`、`/depth`、`/immersion`。"
             f"{note}"
         )
 
     async def set_model(self, guild_id: int, arg: str) -> str:
+        settings = get_settings()
         guild_settings = await self.repo.get_or_create_settings(guild_id)
-        parsed = parse_model_arg(arg)
-        if parsed is None:
-            return "可用模型：`flash`（deepseek-v4-flash）、`pro`（deepseek-v4-pro）。"
-        guild_settings.llm_model = parsed
+        base_url, _, _ = _resolve_guild_endpoint(guild_settings, settings)
+        raw = (arg or "").strip()
+        if not raw:
+            return "請指定模型 id，或別名 `flash`／`pro`（依目前廠商對應）。"
+        # Prefer provider-aware aliases; fall back to legacy DeepSeek parse.
+        resolved = resolve_model_name(raw, "", base_url=base_url)
+        if not resolved:
+            parsed = parse_model_arg(raw)
+            if parsed is None:
+                return (
+                    "可用：自由輸入模型 id（例如 `gemini-2.5-flash`），"
+                    "或別名 `flash`／`pro`（依 `/api` 目前廠商）。"
+                )
+            resolved = parsed
+        guild_settings.llm_model = resolved
         await self.repo.save_settings(guild_settings)
-        return f"已切換模型為 `{parsed}`（僅管理者可改）。"
+        return f"已切換模型為 `{resolved}`（僅管理者可改）。"
+
+    async def set_api_preset(self, guild_id: int, preset_id: str) -> str:
+        preset = get_preset(preset_id)
+        if preset is None:
+            names = "、".join(f"`{k}`" for k in PRESETS)
+            return f"可用 preset：{names}。自訂請用 `/api url` + `/api key` + `/api model`。"
+        guild_settings = await self.repo.get_or_create_settings(guild_id)
+        guild_settings.llm_api_base_url = preset.base_url
+        guild_settings.llm_model = preset.default_model
+        # Keep existing key unless empty — user may only be switching endpoint.
+        await self.repo.save_settings(guild_settings)
+        tip = ""
+        if not (guild_settings.llm_api_key or "").strip():
+            tip = "\n尚未設定本伺服器金鑰：請再執行 `/api key`（或依賴 .env）。"
+        return (
+            f"已切到 `{preset.label}`。\n"
+            f"base=`{preset.base_url}`\n"
+            f"model=`{preset.default_model}`"
+            f"{tip}"
+        )
+
+    async def set_api_url(self, guild_id: int, url_raw: str) -> str:
+        try:
+            url = normalize_base_url(url_raw)
+        except ValueError as exc:
+            return str(exc)
+        guild_settings = await self.repo.get_or_create_settings(guild_id)
+        guild_settings.llm_api_base_url = url
+        await self.repo.save_settings(guild_settings)
+        return (
+            f"已設定 API base=`{url}`（provider=`{detect_provider(url)}`）。\n"
+            "記得 `/api key` 與 `/api model`（或 `/model`）。"
+        )
+
+    async def set_api_key(self, guild_id: int, key_raw: str) -> str:
+        key = (key_raw or "").strip()
+        if not key:
+            return "金鑰不可空白。"
+        if len(key) > 512:
+            return "金鑰過長，請確認是否貼錯。"
+        guild_settings = await self.repo.get_or_create_settings(guild_id)
+        guild_settings.llm_api_key = key
+        await self.repo.save_settings(guild_settings)
+        return f"已儲存本伺服器 API 金鑰：`{mask_api_key(key)}`（不會在公開頻道顯示全文）。"
+
+    async def set_api_model(self, guild_id: int, model_raw: str) -> str:
+        return await self.set_model(guild_id, model_raw)
+
+    async def clear_api_override(self, guild_id: int) -> str:
+        guild_settings = await self.repo.get_or_create_settings(guild_id)
+        guild_settings.llm_api_base_url = ""
+        guild_settings.llm_api_key = ""
+        await self.repo.save_settings(guild_settings)
+        return "已清除本伺服器 API 覆寫，改回使用 `.env` 的 DEEPSEEK_* 預設。"
+
+    async def test_api(self, guild_id: int) -> str:
+        settings = get_settings()
+        guild_settings = await self.repo.get_or_create_settings(guild_id)
+        base_url, api_key, model = _resolve_guild_endpoint(guild_settings, settings)
+        system = (
+            '只輸出合法 JSON：{"reply":"OK","emotion":"neutral","trigger_cg":false,'
+            '"cg_tier":"none","cg_scene":null,"image_prompt":null}'
+        )
+        try:
+            raw = await self.llm.chat(
+                system=system,
+                messages=[{"role": "user", "content": "[老師測試] 只回覆 OK"}],
+                model=model,
+                depth="off",
+                api_key=api_key,
+                base_url=base_url,
+            )
+            parsed = self.llm.parse_result(raw)
+            soft = "（soft fallback）" if is_soft_fallback(parsed.reply) else ""
+            return (
+                f"測試完成{soft}。\n"
+                f"provider=`{detect_provider(base_url)}` model=`{model}`\n"
+                f"reply=`{parsed.reply[:120]}`"
+            )
+        except Exception as exc:
+            return f"測試失敗：`{type(exc).__name__}: {exc}`"
 
     async def set_depth(self, guild_id: int, arg: str) -> str:
         guild_settings = await self.repo.get_or_create_settings(guild_id)

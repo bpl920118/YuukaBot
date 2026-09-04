@@ -72,6 +72,19 @@ pip install -r requirements.txt
 # restart bot process (keep existing .env secrets)
 ```
 
+### API 切換（管理者 Discord）
+
+```text
+/api status          # 看目前 base／金鑰遮罩／model
+/api preset gemini   # 或 deepseek / openai（改 base＋預設模型）
+/api key <金鑰>      # 只自己看得到；勿公開貼
+/api model gemini-2.5-flash
+/api test            # 最短連線測試
+/api clear           # 清掉伺服器覆寫，改回 .env
+```
+
+自訂廠商：`/api url https://...` + `/api key` + `/api model`（須 OpenAI 相容 `/chat/completions`）。
+
 ### Pull prompt（更新時貼給 Grok）
 
 ```text
@@ -80,6 +93,7 @@ YuukaBot 有新 commit。請到 /workspace/YuukaBot：
 2. source .venv/bin/activate && pip install -r requirements.txt
 3. 重啟 tmux/nohup 裡的 python run.py（保留現有 .env，不要覆寫密鑰）
 4. 確認 log 有 Logged in，回報結果
+5. 可用 /api status 查看目前 API；切 Gemini：/api preset gemini → /api key → /api test
 ```
 
 ---

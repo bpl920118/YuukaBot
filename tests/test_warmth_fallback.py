@@ -35,3 +35,20 @@ def test_salvage_broken_json_reply() -> None:
     assert "課金" in salv["reply"]
     parsed = LlmClient().parse_result(raw + " bad")
     assert "課金" in parsed.reply
+
+
+def test_coerce_message_from_reasoning_content() -> None:
+    from clients.llm import _coerce_message_text
+
+    msg = {
+        "content": "",
+        "reasoning_content": (
+            '（心想：先兇一點）\n'
+            '{"reply": "（敲計算機）又想課金？先報金額。",'
+            ' "emotion": "angry", "trigger_cg": false, "cg_tier": "none",'
+            ' "cg_scene": null, "image_prompt": null}'
+        ),
+    }
+    text = _coerce_message_text(msg)
+    assert "課金" in text
+    assert "reply" in text

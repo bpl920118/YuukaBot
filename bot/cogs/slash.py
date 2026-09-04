@@ -79,14 +79,18 @@ class SlashCog(commands.Cog):
             f"在。延遲約 `{latency_ms}` ms。", ephemeral=True
         )
 
-    # ── teacher: model / depth ──────────────────────────────
+    # ── teacher: model / depth / api ────────────────────────
 
     @app_commands.command(name="model", description="查看或切換 LLM 模型（僅管理者）")
-    @app_commands.describe(choice="留空則查看目前設定")
+    @app_commands.describe(
+        choice="快捷別名（依目前廠商）",
+        name="自由輸入模型 id，例如 gemini-2.5-flash",
+    )
     @app_commands.choices(
         choice=[
             app_commands.Choice(name="flash（快速）", value="flash"),
             app_commands.Choice(name="pro（高品質）", value="pro"),
+            app_commands.Choice(name="lite（更省，若廠商有）", value="lite"),
         ]
     )
     @owner_only()
@@ -94,14 +98,15 @@ class SlashCog(commands.Cog):
         self,
         interaction: discord.Interaction,
         choice: app_commands.Choice[str] | None = None,
+        name: str | None = None,
     ) -> None:
         gid = await _require_guild(interaction)
         if gid is None:
             return
-        if choice is None:
+        if choice is None and not (name or "").strip():
             text = await self.pipeline.describe_llm(gid)
         else:
-            text = await self.pipeline.set_model(gid, choice.value)
+            text = await self.pipeline.set_model(gid, (name or "").strip() or choice.value)
         await interaction.response.send_message(text, ephemeral=True)
 
     @app_commands.command(name="depth", description="查看或切換思考深度（僅管理者）")
@@ -153,6 +158,91 @@ class SlashCog(commands.Cog):
         else:
             text = await self.pipeline.set_immersion(gid, choice.value == "on")
         await interaction.response.send_message(text, ephemeral=True)
+
+    api = app_commands.Group(
+        name="api", description="切換／設定 OpenAI 相容 LLM API（僅管理者）"
+    )
+
+    @api.command(name="status", description="查看目前 API 網址／金鑰遮罩／模型")
+    @owner_only()
+    async def api_status(self, interaction: discord.Interaction) -> None:
+        gid = await _require_guild(interaction)
+        if gid is None:
+            return
+        text = await self.pipeline.describe_llm(gid)
+        await interaction.response.send_message(text, ephemeral=True)
+
+    @api.command(name="preset", description="一鍵切到常見廠商（會改 base＋預設模型）")
+    @app_commands.describe(choice="廠商预设")
+    @app_commands.choices(
+        choice=[
+            app_commands.Choice(name="DeepSeek", value="deepseek"),
+            app_commands.Choice(name="Gemini（OpenAI 相容）", value="gemini"),
+            app_commands.Choice(name="OpenAI", value="openai"),
+        ]
+    )
+    @owner_only()
+    async def api_preset(
+        self,
+        interaction: discord.Interaction,
+        choice: app_commands.Choice[str],
+    ) -> None:
+        gid = await _require_guild(interaction)
+        if gid is None:
+            return
+        text = await self.pipeline.set_api_preset(gid, choice.value)
+        await interaction.response.send_message(text, ephemeral=True)
+
+    @api.command(name="url", description="設定自訂 API base（OpenAI 相容）")
+    @app_commands.describe(
+        url="例如 https://api.deepseek.com 或 Gemini 的 …/v1beta/openai"
+    )
+    @owner_only()
+    async def api_url(self, interaction: discord.Interaction, url: str) -> None:
+        gid = await _require_guild(interaction)
+        if gid is None:
+            return
+        text = await self.pipeline.set_api_url(gid, url)
+        await interaction.response.send_message(text, ephemeral=True)
+
+    @api.command(name="key", description="設定本伺服器 API 金鑰（僅你看得到）")
+    @app_commands.describe(key="廠商 API key（勿在公開頻道貼）")
+    @owner_only()
+    async def api_key(self, interaction: discord.Interaction, key: str) -> None:
+        gid = await _require_guild(interaction)
+        if gid is None:
+            return
+        text = await self.pipeline.set_api_key(gid, key)
+        await interaction.response.send_message(text, ephemeral=True)
+
+    @api.command(name="model", description="設定模型 id（可自由輸入）")
+    @app_commands.describe(name="例如 gemini-2.5-flash / deepseek-v4-flash / gpt-4o-mini")
+    @owner_only()
+    async def api_model(self, interaction: discord.Interaction, name: str) -> None:
+        gid = await _require_guild(interaction)
+        if gid is None:
+            return
+        text = await self.pipeline.set_api_model(gid, name)
+        await interaction.response.send_message(text, ephemeral=True)
+
+    @api.command(name="clear", description="清除伺服器 API 覆寫，改回 .env")
+    @owner_only()
+    async def api_clear(self, interaction: discord.Interaction) -> None:
+        gid = await _require_guild(interaction)
+        if gid is None:
+            return
+        text = await self.pipeline.clear_api_override(gid)
+        await interaction.response.send_message(text, ephemeral=True)
+
+    @api.command(name="test", description="對目前 API 打一則最短測試")
+    @owner_only()
+    async def api_test(self, interaction: discord.Interaction) -> None:
+        gid = await _require_guild(interaction)
+        if gid is None:
+            return
+        await interaction.response.defer(ephemeral=True)
+        text = await self.pipeline.test_api(gid)
+        await interaction.followup.send(text, ephemeral=True)
 
     # ── teacher: image group ────────────────────────────────
 
