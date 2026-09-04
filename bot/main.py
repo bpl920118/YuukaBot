@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import discord
@@ -73,7 +74,7 @@ async def maybe_clear_channel_messages(
         return False
 
     bot_only = False
-    limit = 50
+    limit = 200
     if body.startswith("清除機器人訊息") or body.startswith("刪除機器人訊息"):
         bot_only = True
         rest = body.replace("清除機器人訊息", "", 1).replace("刪除機器人訊息", "", 1).strip()
@@ -90,10 +91,41 @@ async def maybe_clear_channel_messages(
         await message.reply("只能在文字頻道清除訊息。", mention_author=False)
         return True
 
-    if rest:
-        m = re.search(r"\d+", rest)
+    tz8 = timezone(timedelta(hours=8))
+    after_dt: datetime | None = None
+    after_id: int | None = None
+
+    time_m = re.search(r"從\s*(\d{1,2})[:：](\d{2})", rest)
+    if time_m:
+        hour, minute = int(time_m.group(1)), int(time_m.group(2))
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            await message.reply(
+                "時間格式不對，請用例如 `（清除頻道 從10:55）`。",
+                mention_author=False,
+            )
+            return True
+        local_now = datetime.now(tz8)
+        after_dt = local_now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if after_dt > local_now:
+            after_dt -= timedelta(days=1)
+        after_dt = after_dt.astimezone(timezone.utc)
+    elif message.reference and message.reference.message_id and (
+        rest in ("", "從此", "之後", "這則", "開始")
+    ):
+        after_id = int(message.reference.message_id)
+    elif rest:
+        m = re.fullmatch(r"\d+", rest.strip())
         if m:
             limit = max(1, min(200, int(m.group(0))))
+        else:
+            await message.reply(
+                "用法：\n"
+                "`（清除頻道 從10:55）` 從今天該時間起刪\n"
+                "回覆劇情第一則後再 `@bot （清除頻道 從此）`\n"
+                "`（清除頻道 50）` 刪最近 50 則",
+                mention_author=False,
+            )
+            return True
 
     me = message.guild.me if message.guild else None
     perms = message.channel.permissions_for(me) if me else None
@@ -101,15 +133,20 @@ async def maybe_clear_channel_messages(
     if bot_only:
         if perms is not None and not (perms.manage_messages or perms.administrator):
             deleted = 0
-            async for msg in message.channel.history(limit=limit * 3):
-                if bot.user is not None and msg.author.id == bot.user.id:
-                    try:
-                        await msg.delete()
-                        deleted += 1
-                    except discord.HTTPException:
-                        pass
-                    if deleted >= limit:
-                        break
+            async for msg in message.channel.history(limit=min(limit * 3, 500)):
+                if bot.user is None or msg.author.id != bot.user.id:
+                    continue
+                if after_id is not None and msg.id < after_id:
+                    continue
+                if after_dt is not None and msg.created_at < after_dt:
+                    continue
+                try:
+                    await msg.delete()
+                    deleted += 1
+                except discord.HTTPException:
+                    pass
+                if deleted >= limit:
+                    break
             await message.channel.send(f"已刪除機器人訊息約 {deleted} 則。")
             return True
     else:
@@ -122,8 +159,12 @@ async def maybe_clear_channel_messages(
             return True
 
     def check(msg: discord.Message) -> bool:
-        if bot_only:
-            return bot.user is not None and msg.author.id == bot.user.id
+        if bot_only and (bot.user is None or msg.author.id != bot.user.id):
+            return False
+        if after_id is not None and msg.id < after_id:
+            return False
+        if after_dt is not None and msg.created_at < after_dt:
+            return False
         return True
 
     try:
@@ -136,9 +177,14 @@ async def maybe_clear_channel_messages(
         return True
 
     kind = "機器人訊息" if bot_only else "頻道訊息"
+    scope = ""
+    if after_id is not None:
+        scope = "（從指定訊息起）"
+    elif after_dt is not None:
+        scope = f"（從 {after_dt.astimezone(tz8).strftime('%H:%M')} 起）"
     await message.channel.send(
-        f"已刪除{kind} {len(deleted)} 則"
-        f"（上限 {limit}；超過 14 天的訊息 Discord 不允許批次刪）。"
+        f"已刪除{kind} {len(deleted)} 則{scope}"
+        f"（掃描上限 {limit}；超過 14 天的訊息 Discord 不允許批次刪）。"
     )
     return True
 
