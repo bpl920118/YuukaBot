@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     # Thinking depth when guild override is empty: off | high | max
     deepseek_depth: str = "off"
     # Flash chat sampling (ignored by API when thinking is on)
-    llm_temperature: float = 0.8
+    llm_temperature: float = 1.0
     llm_top_p: float = 0.9
     llm_max_tokens: int = 768
 
@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     cg_cooldown_seconds: int = 600
     cg_daily_limit: int = 8
     user_chat_cooldown_seconds: int = 3
-    memory_limit: int = 12
+    memory_limit: int = 16
     max_affection_delta: int = 15
 
     default_character_id: str = "yuuka"

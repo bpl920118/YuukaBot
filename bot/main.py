@@ -93,14 +93,33 @@ async def handle_message(bot: YuukaBot, message: discord.Message) -> None:
             await message.reply(f"……計算出錯了：`{exc}`", mention_author=False)
             return
 
-    files = []
-    image_path = result.get("image_path")
-    if image_path:
-        path = Path(image_path)
-        if path.exists() and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
-            files.append(discord.File(path))
+    # Reply text immediately; CG keywords come from the LLM, SD runs after.
+    await message.reply(result["reply"], mention_author=False)
 
-    await message.reply(result["reply"], files=files, mention_author=False)
+    pending_cg = result.get("pending_cg")
+    if pending_cg:
+        try:
+            async with message.channel.typing():
+                image_path = await bot.pipeline.fulfill_cg(
+                    guild_id=message.guild.id,
+                    pending_cg=pending_cg,
+                )
+        except Exception:
+            image_path = None
+        if image_path:
+            path = Path(image_path)
+            if path.exists() and path.suffix.lower() in {
+                ".png",
+                ".jpg",
+                ".jpeg",
+                ".webp",
+                ".gif",
+            }:
+                await message.reply(
+                    file=discord.File(path),
+                    mention_author=False,
+                )
+
     await bot.process_commands(message)
 
 

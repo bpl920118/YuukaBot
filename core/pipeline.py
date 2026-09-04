@@ -4,10 +4,21 @@ from datetime import datetime, timezone
 
 from config import get_settings
 from core.prompt_builder import build_image_prompt
-from core.schemas import build_runtime_system, soft_fallback_reply
-from core.character import load_character, load_system_prompt, match_lorebook
+from core.schemas import (
+    build_runtime_system,
+    is_soft_fallback,
+    scrub_score_leak,
+    soft_fallback_reply,
+)
+from core.character import (
+    load_character,
+    load_system_prompt,
+    match_lorebook,
+    match_storyline,
+)
 from core.immersion import apply_immersion_marker
 from core.llm_options import parse_depth_arg, parse_model_arg, resolve_depth, resolve_model
+from core.scoring import AffectionScorer
 from clients.webui import WebuiClient, normalize_webui_url
 from clients.llm import LlmClient, is_near_duplicate
 from db.repository import Repository
@@ -40,6 +51,7 @@ class ChatPipeline:
         self.character_id = character_id
         self.character = load_character(character_id)
         self.base_prompt = load_system_prompt(character_id)
+        self.scorer = AffectionScorer(repo, character_id=character_id)
 
     async def handle(
         self,
@@ -60,6 +72,7 @@ class ChatPipeline:
                 "reply": "……現在設定成只回應管理者。有正事的話請本人來說。",
                 "emotion": "neutral",
                 "image_path": None,
+                "pending_cg": None,
             }
 
         history = await self.repo.recent_messages(
@@ -79,6 +92,9 @@ class ChatPipeline:
                     }
                 )
             else:
+                # Skip canned soft-fallbacks so they don't teach the model ice-queen lines.
+                if is_soft_fallback(m.content or ""):
+                    continue
                 messages.append({"role": "assistant", "content": m.content})
                 last_assistant_reply = m.content or last_assistant_reply
 
@@ -98,11 +114,23 @@ class ChatPipeline:
             character_id=self.character_id,
             limit=2,
         )
+        recent_for_story = [
+            m.content
+            for m in history
+            if m.role in {"user", "assistant"} and (m.content or "").strip()
+        ][-8:]
+        story = match_storyline(
+            text or "",
+            recent_for_story,
+            self.character,
+            character_id=self.character_id,
+        )
+        lore_blocks = "\n\n".join(p for p in (story, lore) if p.strip())
         system = build_runtime_system(
             self.base_prompt,
             extra_layers=guild_settings.extra_layers or "",
             work_mode=work_mode,
-            lore=lore,
+            lore=lore_blocks,
         )
 
         model = resolve_model(guild_settings.llm_model, settings.deepseek_model)
@@ -118,14 +146,24 @@ class ChatPipeline:
             last_reply=last_assistant_reply or None,
         )
         result = self.llm.parse_result(raw)
+        result.reply = scrub_score_leak(result.reply)
 
         # Final guard: still duplicated after retries → local soft line, no more API.
-        if last_assistant_reply and is_near_duplicate(result.reply, last_assistant_reply):
+        used_soft_fallback = False
+        if (
+            last_assistant_reply
+            and not is_soft_fallback(last_assistant_reply)
+            and is_near_duplicate(result.reply, last_assistant_reply)
+        ):
             result.reply = soft_fallback_reply(user_id ^ guild_id)
             result.emotion = "flustered"
             result.trigger_cg = False
             result.cg_tier = "none"
             result.cg_scene = None
+            result.image_prompt = None
+            used_soft_fallback = True
+        elif is_soft_fallback(result.reply):
+            used_soft_fallback = True
 
         await self.repo.add_message(
             guild_id=guild_id,
@@ -135,50 +173,210 @@ class ChatPipeline:
             display_name=display_name,
             character_id=self.character_id,
         )
-        await self.repo.add_message(
-            guild_id=guild_id,
-            role="assistant",
-            content=result.reply,
-            character_id=self.character_id,
-        )
+        # Do not persist canned soft-fallbacks — they poison memory and feel ice-cold.
+        if not used_soft_fallback:
+            await self.repo.add_message(
+                guild_id=guild_id,
+                role="assistant",
+                content=result.reply,
+                character_id=self.character_id,
+            )
 
         if work_mode:
             return {
                 "reply": result.reply,
                 "emotion": "neutral",
                 "image_path": None,
+                "pending_cg": None,
             }
 
-        image_path = None
-        allow_cg, tier = await self._cg_policy(
+        # Shared guild affection — never shown in reply text.
+        bond = await self.repo.get_or_create_bond(guild_id, self.character_id)
+        old_affection = int(bond.affection)
+        breakdown = await self.scorer.compute(
             guild_id=guild_id,
-            trigger=result.trigger_cg,
-            requested_tier=result.cg_tier,
+            user_id=user_id,
+            user_text=text or "",
+            llm_delta=0,
+            score_tags=[],
         )
-        if allow_cg and result.cg_scene is not None:
-            prompt = build_image_prompt(result.cg_scene.model_dump(), self.character_id)
-            image_path = await self.webui.generate(
-                prompt=prompt,
-                tier=tier,
+        new_affection = await self.scorer.apply(
+            guild_id=guild_id,
+            user_id=user_id,
+            current_affection=old_affection,
+            breakdown=breakdown,
+            emotion=result.emotion,
+        )
+
+        threshold = self._cg_threshold(guild_settings)
+        score_unlock = new_affection >= threshold >= 1
+        pending_cg = None
+        if score_unlock:
+            allow_cg, tier = await self._cg_policy(
                 guild_id=guild_id,
-                base_url=guild_settings.sd_webui_url or None,
+                trigger=True,
+                requested_tier="normal",
+                bypass_cooldown=False,
             )
-            if image_path:
-                await self.repo.add_gallery(
+            if allow_cg:
+                pending_cg = await self._queue_cg_from_context(
                     guild_id=guild_id,
-                    path=str(image_path),
-                    prompt=prompt,
+                    user_id=user_id,
+                    guild_settings=guild_settings,
+                    result=result,
+                    messages=messages,
                     tier=tier,
-                    emotion=result.emotion,
-                    triggered_by_user_id=user_id,
-                    character_id=self.character_id,
                 )
+                if pending_cg:
+                    # Spend threshold; leftover carries over. Silent — no chat announce.
+                    spent = new_affection - threshold
+                    await self.repo.update_bond(
+                        guild_id,
+                        affection=spent,
+                        emotion=result.emotion,
+                        character_id=self.character_id,
+                    )
+                    await self.repo.add_score_event(
+                        guild_id=guild_id,
+                        category="milestone",
+                        amount=-threshold,
+                        reason=f"達到門檻 {threshold} 兌換 CG",
+                        user_id=user_id,
+                        character_id=self.character_id,
+                    )
 
         return {
             "reply": result.reply,
             "emotion": result.emotion,
-            "image_path": image_path,
+            "image_path": None,
+            "pending_cg": pending_cg,
         }
+
+    def _cg_threshold(self, guild_settings) -> int:
+        raw = getattr(guild_settings, "cg_score_threshold", None)
+        if raw is None or int(raw) <= 0:
+            scoring = (self.character.get("scoring") or {})
+            return max(1, min(100, int(scoring.get("cg_threshold_default", 30))))
+        return max(1, min(100, int(raw)))
+
+    def _has_cg_keywords(self, result) -> bool:
+        scene_dump = result.cg_scene.model_dump() if result.cg_scene else None
+        if (result.image_prompt or "").strip():
+            return True
+        if scene_dump and any(
+            (scene_dump.get(k) or "").strip()
+            for k in ("location", "time", "action", "expression", "mood")
+        ):
+            return True
+        return False
+
+    async def _queue_cg_from_context(
+        self,
+        *,
+        guild_id: int,
+        user_id: int,
+        guild_settings,
+        result,
+        messages: list[dict[str, str]],
+        tier: str,
+    ) -> dict | None:
+        settings = get_settings()
+        effective_url = (
+            (guild_settings.sd_webui_url or "").strip()
+            or (settings.sd_webui_url or "").strip()
+        )
+        if not effective_url:
+            return None
+
+        image_prompt = result.image_prompt
+        scene_dump = result.cg_scene.model_dump() if result.cg_scene else None
+        if not self._has_cg_keywords(result):
+            image_prompt = await self._infer_image_prompt(messages, result.reply)
+            scene_dump = None
+        if not (image_prompt or "").strip() and not scene_dump:
+            # Last-resort visual beat from emotion / reply.
+            scene_dump = {
+                "location": "millennium student council office, desk, paperwork",
+                "time": "afternoon",
+                "action": "holding calculator, looking at viewer",
+                "expression": result.emotion or "neutral",
+                "mood": "soft indoor light",
+            }
+        prompt = build_image_prompt(
+            scene_dump,
+            self.character_id,
+            image_prompt=image_prompt,
+        )
+        return {
+            "prompt": prompt,
+            "tier": tier,
+            "emotion": result.emotion,
+            "triggered_by_user_id": user_id,
+            "base_url": guild_settings.sd_webui_url or None,
+        }
+
+    async def _infer_image_prompt(
+        self, messages: list[dict[str, str]], reply: str
+    ) -> str | None:
+        """Ask LLM for English SD tags from recent dialogue + this reply."""
+        snippet = []
+        for m in messages[-6:]:
+            role = m.get("role")
+            content = (m.get("content") or "").strip()
+            if role and content:
+                snippet.append(f"{role}: {content[:200]}")
+        snippet.append(f"assistant: {reply[:300]}")
+        system = (
+            "只輸出合法 JSON（不要 markdown）："
+            '{"reply":".","emotion":"neutral","trigger_cg":true,"cg_tier":"normal",'
+            '"cg_scene":null,"image_prompt":"english danbooru tags for the latest Yuuka beat"}。'
+            "image_prompt 必須是英文短標籤，對應對話最後畫面；禁止中文、禁止 NSFW、禁止解釋。"
+        )
+        try:
+            raw = await self.llm.chat(
+                system=system,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "對話摘要：\n" + "\n".join(snippet),
+                    }
+                ],
+                depth="off",
+            )
+            parsed = self.llm.parse_result(raw)
+            if parsed.image_prompt:
+                return parsed.image_prompt
+        except Exception:
+            return None
+        return None
+
+    async def fulfill_cg(
+        self,
+        *,
+        guild_id: int,
+        pending_cg: dict,
+    ) -> str | None:
+        """Run SD txt2img for a pending job; returns image path or None."""
+        prompt = pending_cg.get("prompt") or ""
+        if not prompt.strip():
+            return None
+        image_path = await self.webui.generate(
+            prompt=prompt,
+            tier=str(pending_cg.get("tier") or "normal"),
+            guild_id=guild_id,
+            base_url=pending_cg.get("base_url"),
+        )
+        if image_path:
+            await self.repo.add_gallery(
+                guild_id=guild_id,
+                path=str(image_path),
+                prompt=prompt,
+                tier=str(pending_cg.get("tier") or "normal"),
+                emotion=str(pending_cg.get("emotion") or "neutral"),
+                triggered_by_user_id=int(pending_cg.get("triggered_by_user_id") or 0),
+                character_id=self.character_id,
+            )
+        return str(image_path) if image_path else None
 
     async def _cg_policy(
         self,
@@ -186,26 +384,122 @@ class ChatPipeline:
         guild_id: int,
         trigger: bool,
         requested_tier: str,
+        bypass_cooldown: bool = False,
     ) -> tuple[bool, str]:
         settings = get_settings()
         if not trigger:
             return False, "none"
 
-        last = await self.repo.last_gallery_at(guild_id, self.character_id)
         now = datetime.now(timezone.utc)
-        if last is not None:
-            if last.tzinfo is None:
-                last = last.replace(tzinfo=timezone.utc)
-            if (now - last).total_seconds() < settings.cg_cooldown_seconds:
-                return False, "none"
+        if not bypass_cooldown:
+            last = await self.repo.last_gallery_at(guild_id, self.character_id)
+            if last is not None:
+                if last.tzinfo is None:
+                    last = last.replace(tzinfo=timezone.utc)
+                if (now - last).total_seconds() < settings.cg_cooldown_seconds:
+                    return False, "none"
 
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         today_items = await self.repo.gallery_since(guild_id, day_start, self.character_id)
-        if len(today_items) >= settings.cg_daily_limit:
+        if len(today_items) >= settings.cg_daily_limit and not bypass_cooldown:
             return False, "none"
 
         tier = "special" if requested_tier == "special" else "normal"
         return True, tier
+
+    async def describe_score(self, guild_id: int) -> str:
+        bond = await self.repo.get_or_create_bond(guild_id, self.character_id)
+        guild_settings = await self.repo.get_or_create_settings(guild_id)
+        threshold = self._cg_threshold(guild_settings)
+        return (
+            f"本伺服器共用好感：`{bond.affection}/100`\n"
+            f"自動生圖門檻：`{threshold}`（達到後依當下對話產關鍵字並出圖，並扣除門檻分數）\n"
+            f"目前情緒標記：`{bond.emotion}`\n"
+            "對話裡不會顯示分數；查詢請用本指令。"
+        )
+
+    async def set_score_threshold(self, guild_id: int, value: int) -> str:
+        n = max(1, min(100, int(value)))
+        guild_settings = await self.repo.get_or_create_settings(guild_id)
+        guild_settings.cg_score_threshold = n
+        await self.repo.save_settings(guild_settings)
+        return f"已設定自動生圖門檻為 `{n}`（僅管理者可改）。"
+
+    async def set_affection(self, guild_id: int, value: int) -> str:
+        n = max(0, min(100, int(value)))
+        await self.repo.update_bond(
+            guild_id, affection=n, character_id=self.character_id
+        )
+        return f"已將本伺服器共用好感設為 `{n}`（僅管理者可改）。"
+
+    async def force_cg_from_memory(self, guild_id: int, user_id: int) -> dict:
+        """Owner-only: build CG keywords from recent memory and generate."""
+        settings = get_settings()
+        guild_settings = await self.repo.get_or_create_settings(guild_id)
+        history = await self.repo.recent_messages(
+            guild_id, limit=settings.memory_limit, character_id=self.character_id
+        )
+        messages: list[dict[str, str]] = []
+        last_reply = "（抬起頭，看向老師）"
+        for m in history:
+            if m.role == "user":
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": _user_message_payload(
+                            user_id=m.user_id, text=m.content
+                        ),
+                    }
+                )
+            else:
+                messages.append({"role": "assistant", "content": m.content})
+                last_reply = m.content or last_reply
+
+        class _Tmp:
+            reply = last_reply
+            emotion = "neutral"
+            image_prompt = None
+            cg_scene = None
+
+        allow_cg, tier = await self._cg_policy(
+            guild_id=guild_id,
+            trigger=True,
+            requested_tier="normal",
+            bypass_cooldown=True,
+        )
+        if not allow_cg:
+            return {
+                "reply": "今日生圖次數已滿，無法強制出圖。",
+                "emotion": "neutral",
+                "image_path": None,
+            }
+
+        pending = await self._queue_cg_from_context(
+            guild_id=guild_id,
+            user_id=user_id,
+            guild_settings=guild_settings,
+            result=_Tmp(),
+            messages=messages,
+            tier=tier,
+        )
+        if not pending:
+            return {
+                "reply": "沒有可用的生圖網址。請先 `/image url` 或設定 SD_WEBUI_URL。",
+                "emotion": "neutral",
+                "image_path": None,
+            }
+        path = await self.fulfill_cg(guild_id=guild_id, pending_cg=pending)
+        if not path:
+            return {
+                "reply": "強制生圖失敗（WebUI 無回應或逾時）。",
+                "emotion": "neutral",
+                "image_path": None,
+            }
+        return {
+            "reply": "強制生圖完成（依近期對話記憶產關鍵字）。",
+            "emotion": "neutral",
+            "image_path": path,
+        }
 
     async def describe_llm(self, guild_id: int) -> str:
         settings = get_settings()
@@ -305,7 +599,7 @@ class ChatPipeline:
             "expression": "slight smile, half-closed eyes",
             "mood": "calm, soft lighting",
         }
-        prompt = build_image_prompt(scene, self.character_id)
+        prompt = build_image_prompt(scene, self.character_id, image_prompt=None)
         try:
             image_path = await self.webui.generate(
                 prompt=prompt,

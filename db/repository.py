@@ -307,3 +307,9 @@ def _ensure_guild_settings_llm_columns(sync_conn) -> None:
                 "ALTER TABLE guild_settings ADD COLUMN llm_immersion INTEGER DEFAULT 0"
             )
         )
+    if "cg_score_threshold" not in cols:
+        sync_conn.execute(
+            text(
+                "ALTER TABLE guild_settings ADD COLUMN cg_score_threshold INTEGER DEFAULT 30"
+            )
+        )

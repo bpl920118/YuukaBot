@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
@@ -8,8 +9,10 @@ import httpx
 
 from config import get_settings
 from core.llm_options import resolve_depth, resolve_model
-from core.schemas import LlmChatResult, soft_fallback_reply
+from core.schemas import LlmChatResult, is_soft_fallback, soft_fallback_reply
 
+
+logger = logging.getLogger(__name__)
 
 _PARSE_FALLBACK = "……計算機好像跳了一下。再說一次好嗎？"
 _RETRY_NUDGE = (
@@ -37,6 +40,31 @@ def is_near_duplicate(a: str, b: str) -> bool:
     return False
 
 
+def _salvage_reply_field(raw: str) -> dict[str, Any] | None:
+    """Pull a usable reply out of near-JSON when full parse fails."""
+    text = (raw or "").strip()
+    if not text:
+        return None
+    match = re.search(r'"reply"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
+    if not match:
+        return None
+    try:
+        reply = json.loads(f'"{match.group(1)}"')
+    except json.JSONDecodeError:
+        reply = match.group(1)
+    reply = (reply or "").strip()
+    if len(reply) < 2:
+        return None
+    return {
+        "reply": reply[:500],
+        "emotion": "neutral",
+        "trigger_cg": False,
+        "cg_tier": "none",
+        "cg_scene": None,
+        "image_prompt": None,
+    }
+
+
 class LlmClient:
     def __init__(self) -> None:
         s = get_settings()
@@ -62,6 +90,7 @@ class LlmClient:
                     "trigger_cg": False,
                     "cg_tier": "none",
                     "cg_scene": None,
+                    "image_prompt": None,
                 },
                 ensure_ascii=False,
             )
@@ -69,6 +98,13 @@ class LlmClient:
         use_model = resolve_model(model, self.model)
         use_depth = resolve_depth(depth, self.depth)
         settings = get_settings()
+
+        # Soft-fallback lines in memory must not trigger near-duplicate rejection.
+        effective_last = (
+            None
+            if (last_reply and is_soft_fallback(last_reply))
+            else last_reply
+        )
 
         payload: dict[str, Any] = {
             "model": use_model,
@@ -94,10 +130,19 @@ class LlmClient:
 
         last_raw = ""
         working_messages = list(payload["messages"])
-        for attempt in range(2):
+        for attempt in range(3):
             attempt_payload = {**payload, "messages": working_messages}
-            last_raw = await self._post_once(url, headers, attempt_payload, timeout)
+            try:
+                last_raw = await self._post_once(url, headers, attempt_payload, timeout)
+            except Exception as exc:
+                logger.warning("LLM HTTP attempt %s failed: %s", attempt + 1, exc)
+                working_messages = [
+                    *payload["messages"],
+                    {"role": "user", "content": _RETRY_NUDGE},
+                ]
+                continue
             if not (last_raw or "").strip():
+                logger.warning("LLM empty content on attempt %s", attempt + 1)
                 working_messages = [
                     *payload["messages"],
                     {"role": "user", "content": _RETRY_NUDGE},
@@ -106,10 +151,23 @@ class LlmClient:
             try:
                 data = self._extract_json(last_raw)
                 result = LlmChatResult.model_validate(data)
-                if last_reply and is_near_duplicate(result.reply, last_reply):
+                if effective_last and is_near_duplicate(result.reply, effective_last):
                     raise ValueError("near-duplicate reply")
-                return last_raw
-            except Exception:
+                return json.dumps(result.model_dump(), ensure_ascii=False)
+            except Exception as exc:
+                salvaged = _salvage_reply_field(last_raw)
+                if salvaged:
+                    try:
+                        result = LlmChatResult.model_validate(salvaged)
+                        if not (
+                            effective_last
+                            and is_near_duplicate(result.reply, effective_last)
+                        ):
+                            logger.info("LLM salvaged reply field on attempt %s", attempt + 1)
+                            return json.dumps(result.model_dump(), ensure_ascii=False)
+                    except Exception:
+                        pass
+                logger.warning("LLM parse attempt %s failed: %s", attempt + 1, exc)
                 working_messages = [
                     *payload["messages"],
                     {"role": "assistant", "content": last_raw[:800]},
@@ -118,6 +176,7 @@ class LlmClient:
                 continue
 
         # Local soft fallback — avoid hammering API or looping "計算機跳了".
+        logger.error("LLM soft-fallback after retries; last_raw=%r", (last_raw or "")[:200])
         fallback = soft_fallback_reply(hash(last_raw or last_reply or "") & 0xFFFF)
         return json.dumps(
             {
@@ -126,6 +185,7 @@ class LlmClient:
                 "trigger_cg": False,
                 "cg_tier": "none",
                 "cg_scene": None,
+                "image_prompt": None,
             },
             ensure_ascii=False,
         )
@@ -143,14 +203,33 @@ class LlmClient:
             data = resp.json()
         message = data["choices"][0]["message"]
         content = message.get("content")
-        if isinstance(content, str):
+        if isinstance(content, str) and content.strip():
             return content
+        # Some gateways return content as a list of text parts.
+        if isinstance(content, list):
+            chunks: list[str] = []
+            for part in content:
+                if isinstance(part, str):
+                    chunks.append(part)
+                elif isinstance(part, dict):
+                    text = part.get("text") or part.get("content")
+                    if isinstance(text, str):
+                        chunks.append(text)
+            joined = "".join(chunks).strip()
+            if joined:
+                return joined
         return ""
 
     def parse_result(self, raw: str) -> LlmChatResult:
         try:
             return LlmChatResult.model_validate(self._extract_json(raw))
         except Exception:
+            salvaged = _salvage_reply_field(raw)
+            if salvaged:
+                try:
+                    return LlmChatResult.model_validate(salvaged)
+                except Exception:
+                    pass
             text = (raw or "").strip()
             if text and not text.startswith("{"):
                 return LlmChatResult(reply=text[:500], emotion="neutral")

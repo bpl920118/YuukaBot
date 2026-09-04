@@ -88,6 +88,8 @@ class GuildSetting(Base):
     llm_immersion: Mapped[int] = mapped_column(Integer, default=0)
     # Empty => fall back to env SD_WEBUI_URL. Teacher-only via /image url.
     sd_webui_url: Mapped[str] = mapped_column(String(256), default="")
+    # Shared-guild affection needed before auto CG (teacher sets via /score threshold).
+    cg_score_threshold: Mapped[int] = mapped_column(Integer, default=30)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

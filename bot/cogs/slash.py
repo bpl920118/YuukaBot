@@ -186,7 +186,7 @@ class SlashCog(commands.Cog):
         text = await self.pipeline.disable_image(gid)
         await interaction.response.send_message(text, ephemeral=True)
 
-    @image.command(name="test", description="強制出一張測試 CG")
+    @image.command(name="test", description="強制出一張測試 CG（固定場景）")
     @owner_only()
     async def image_test(self, interaction: discord.Interaction) -> None:
         gid = await _require_guild(interaction)
@@ -209,6 +209,69 @@ class SlashCog(commands.Cog):
         await interaction.followup.send(
             result["reply"], files=files, ephemeral=True
         )
+
+    @image.command(
+        name="force",
+        description="依近期對話記憶強制生圖（僅管理者；不消耗好感門檻）",
+    )
+    @owner_only()
+    async def image_force(self, interaction: discord.Interaction) -> None:
+        gid = await _require_guild(interaction)
+        if gid is None:
+            return
+        await interaction.response.defer(ephemeral=False)
+        result = await self.pipeline.force_cg_from_memory(gid, interaction.user.id)
+        files = []
+        image_path = result.get("image_path")
+        if image_path:
+            path = Path(image_path)
+            if path.exists() and path.suffix.lower() in {
+                ".png",
+                ".jpg",
+                ".jpeg",
+                ".webp",
+                ".gif",
+            }:
+                files.append(discord.File(path, filename=path.name))
+        await interaction.followup.send(result["reply"], files=files)
+
+    # ── score（共用好感；對話不顯示）────────────────────────
+
+    score = app_commands.Group(
+        name="score", description="伺服器共用好感度（對話不顯示；用指令查）"
+    )
+
+    @score.command(name="show", description="查看本伺服器共用好感與生圖門檻")
+    async def score_show(self, interaction: discord.Interaction) -> None:
+        gid = await _require_guild(interaction)
+        if gid is None:
+            return
+        text = await self.pipeline.describe_score(gid)
+        await interaction.response.send_message(text, ephemeral=True)
+
+    @score.command(name="threshold", description="設定達到多少分自動生圖（僅管理者）")
+    @app_commands.describe(value="1～100，達到後出圖並扣除等量分數")
+    @owner_only()
+    async def score_threshold(
+        self, interaction: discord.Interaction, value: app_commands.Range[int, 1, 100]
+    ) -> None:
+        gid = await _require_guild(interaction)
+        if gid is None:
+            return
+        text = await self.pipeline.set_score_threshold(gid, value)
+        await interaction.response.send_message(text, ephemeral=True)
+
+    @score.command(name="set", description="直接設定共用好感數值（僅管理者）")
+    @app_commands.describe(value="0～100")
+    @owner_only()
+    async def score_set(
+        self, interaction: discord.Interaction, value: app_commands.Range[int, 0, 100]
+    ) -> None:
+        gid = await _require_guild(interaction)
+        if gid is None:
+            return
+        text = await self.pipeline.set_affection(gid, value)
+        await interaction.response.send_message(text, ephemeral=True)
 
     # ── teacher: clear group ────────────────────────────────
 

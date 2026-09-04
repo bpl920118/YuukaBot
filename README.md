@@ -24,14 +24,19 @@ Discord Developer Portal 請開啟 **Message Content Intent**。
 
 ```text
 玩家訊息
-  → DeepSeek 回 JSON（reply / emotion / trigger_cg / cg_scene）
+  → DeepSeek 回 JSON（reply / emotion / 可選畫面關鍵字）
   → 寫入訊息記憶
-  → 若觸發 CG 且 SD_WEBUI_URL 已設定 → WebUI txt2img → 回傳圖片
+  → 更新伺服器共用好感（對話／拜託加分；課金等扣分；對白不顯示分數）
+  → 先回 Discord 文字
+  → 若好感 ≥ 門檻且已設定 SD_WEBUI_URL
+      → 依當下對話／記憶組關鍵字 → WebUI txt2img → 再貼圖，並扣除門檻分數
   → SD_WEBUI_URL 空白時略過生圖（只回文字）
 ```
 
+自動生圖由 **伺服器共用好感門檻** 觸發；關鍵字依當下劇情／記憶產生。管理者可用 `/image force` 強制生圖（不耗門檻）。
+
 人設全文在 [`characters/yuuka-system-prompt.txt`](characters/yuuka-system-prompt.txt)。  
-角色與風格錨點在 [`characters/yuuka.yaml`](characters/yuuka.yaml)。
+角色、計分與風格錨點在 [`characters/yuuka.yaml`](characters/yuuka.yaml)。
 
 ## 指令（斜線 `/`）
 
@@ -43,17 +48,21 @@ Discord Developer Portal 請開啟 **Message Content Intent**。
 |------|------|
 | `/gallery` | 本伺服器最近 CG |
 | `/ping` | 測試機器人是否在線 |
+| `/score show` | 查看共用好感與生圖門檻（僅自己可見） |
 
 對話裡每位成員都會被當成「老師」稱呼；下列設定指令仍僅 `TEACHER_USER_ID`（管理者）可用。
 
 | 指令 | 說明 |
 |------|------|
+| `/score threshold` | 設定達到多少分自動生圖（1～100） |
+| `/score set` | 直接設定共用好感 |
 | `/model` | 查看或切換模型（`flash` / `pro`） |
 | `/depth` | 查看或切換深度（`關` / `high` / `max`） |
 | `/image status` | 測試 WebUI 是否連得上 |
 | `/image url` | 設定生圖 API（Tailscale 等） |
 | `/image off` | 關閉本伺服器生圖覆寫 |
-| `/image test` | 強制出一張測試 CG |
+| `/image test` | 強制出一張測試 CG（固定場景） |
+| `/image force` | 依近期對話記憶強制生圖 |
 | `/clear memory` | 清除本伺服器 bot 對話記憶 |
 | `/clear gallery` | 清除 CG 資料庫紀錄 |
 | `/clear layers` | 清除老師叠加設定 |
