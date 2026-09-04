@@ -75,11 +75,27 @@ async def maybe_clear_channel_messages(
 
     bot_only = False
     limit = 200
-    if body.startswith("清除機器人訊息") or body.startswith("刪除機器人訊息"):
+    if body.startswith("清除機器人訊息") or body.startswith("刪除機器人訊息") or body.startswith(
+        "消除機器人訊息"
+    ):
         bot_only = True
-        rest = body.replace("清除機器人訊息", "", 1).replace("刪除機器人訊息", "", 1).strip()
-    elif body.startswith("清除頻道") or body.startswith("刪除頻道"):
-        rest = body.replace("清除頻道", "", 1).replace("刪除頻道", "", 1).strip()
+        rest = (
+            body.replace("清除機器人訊息", "", 1)
+            .replace("刪除機器人訊息", "", 1)
+            .replace("消除機器人訊息", "", 1)
+            .strip()
+        )
+    elif (
+        body.startswith("清除頻道")
+        or body.startswith("刪除頻道")
+        or body.startswith("消除頻道")
+    ):
+        rest = (
+            body.replace("清除頻道", "", 1)
+            .replace("刪除頻道", "", 1)
+            .replace("消除頻道", "", 1)
+            .strip()
+        )
     else:
         return False
 
