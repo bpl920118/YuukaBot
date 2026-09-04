@@ -116,6 +116,14 @@ scoring:
       - 敗家
       - 體重
       - 100Kg
+  # 依模型 emotion 扣分（sad＝不開心輕扣；angry＝生氣重扣）
+  emotion:
+    sad:
+      delta: -1
+      daily_floor: -8
+    angry:
+      delta: -3
+      daily_floor: -15
   calendar:
     birthday:
       date: "03-14"

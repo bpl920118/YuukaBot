@@ -58,7 +58,7 @@ def _mmdd(d: date | None = None) -> str:
 class AffectionScorer:
     """
     Hybrid scoring:
-    1) Rule layer: chat / work / dislike keywords + calendar events
+    1) Rule layer: chat / work / dislike keywords + calendar + emotion mood
     2) LLM layer: model-suggested affection_change + score_tags
     3) Caps, once-per-year festival keys, final clamp
     """
@@ -77,6 +77,7 @@ class AffectionScorer:
         user_text: str,
         llm_delta: int,
         score_tags: list[str] | None = None,
+        emotion: str | None = None,
         today: date | None = None,
     ) -> ScoreBreakdown:
         today = today or date.today()
@@ -124,6 +125,27 @@ class AffectionScorer:
             else:
                 apply = 0
             breakdown.add("dislike", apply, "觸及優香不喜歡的事")
+
+        # --- emotion mood penalty (sad lighter than angry) ---
+        emo = (emotion or "").strip().lower()
+        emo_cfg_root = cfg.get("emotion", {}) or {}
+        if emo in {"sad", "angry"} and isinstance(emo_cfg_root, dict):
+            emo_cfg = emo_cfg_root.get(emo) or {}
+            emo_delta = int(emo_cfg.get("delta", -1 if emo == "sad" else -3))
+            floor = int(emo_cfg.get("daily_floor", -8 if emo == "sad" else -15))
+            category = f"emotion_{emo}"
+            used = await self.repo.sum_score_today(guild_id, category, self.character_id)
+            room = floor - used
+            if emo_delta < 0:
+                apply = max(emo_delta, room) if room < 0 else 0
+            else:
+                apply = 0
+            reason = (
+                "優香不開心（sad）"
+                if emo == "sad"
+                else "優香生氣（angry）"
+            )
+            breakdown.add(category, apply, reason)
 
         # --- calendar: birthday + festivals ---
         cal = cfg.get("calendar", {})

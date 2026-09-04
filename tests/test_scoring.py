@@ -47,6 +47,28 @@ async def main() -> None:
     )
     assert dislike.total < 0, dislike
 
+    sad = await scorer.compute(
+        guild_id=guild_id + 1,
+        user_id=1,
+        user_text="……",
+        llm_delta=0,
+        score_tags=[],
+        emotion="sad",
+    )
+    angry = await scorer.compute(
+        guild_id=guild_id + 2,
+        user_id=1,
+        user_text="……",
+        llm_delta=0,
+        score_tags=[],
+        emotion="angry",
+    )
+    sad_amt = next(p["amount"] for p in sad.parts if p["category"] == "emotion_sad")
+    angry_amt = next(p["amount"] for p in angry.parts if p["category"] == "emotion_angry")
+    assert sad_amt == -1, sad.parts
+    assert angry_amt == -3, angry.parts
+    assert angry_amt < sad_amt
+
     bday = await scorer.compute(
         guild_id=guild_id,
         user_id=1,
@@ -61,6 +83,8 @@ async def main() -> None:
     print("chat", chat.total, chat.parts)
     print("work", work.total, work.parts)
     print("dislike", dislike.total, dislike.parts)
+    print("sad", sad.total, sad.parts)
+    print("angry", angry.total, angry.parts)
     print("birthday", bday.total, bday.parts)
 
 

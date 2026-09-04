@@ -74,16 +74,19 @@ pip install -r requirements.txt
 
 ### API 切換（管理者 Discord）
 
+`.env` 可同時放多組金鑰：`DEEPSEEK_API_KEY`、`GEMINI_API_KEY`、`OPENAI_API_KEY`。  
+預設廠商用 `LLM_PROVIDER=deepseek|gemini|openai`。
+
 ```text
-/api status          # 看目前 base／金鑰遮罩／model
-/api preset gemini   # 或 deepseek / openai（改 base＋預設模型）
-/api key <金鑰>      # 只自己看得到；勿公開貼
-/api model gemini-2.5-flash
+/api help            # 說明
+/api switch          # 一次選「Gemini · 3.6 Flash」等（推薦）
+/api status          # 看目前廠商／金鑰來源／model
 /api test            # 最短連線測試
-/api clear           # 清掉伺服器覆寫，改回 .env
+/api clear           # 清掉伺服器覆寫，改回 .env LLM_PROVIDER
+/model flash|pro     # 只改「同廠商」模型別名
 ```
 
-自訂廠商：`/api url https://...` + `/api key` + `/api model`（須 OpenAI 相容 `/chat/completions`）。
+進階：`/api preset`、`/api url`、`/api key`、`/api model`。
 
 ### Pull prompt（更新時貼給 Grok）
 
@@ -91,9 +94,16 @@ pip install -r requirements.txt
 YuukaBot 有新 commit。請到 /workspace/YuukaBot：
 1. git pull
 2. source .venv/bin/activate && pip install -r requirements.txt
-3. 重啟 tmux/nohup 裡的 python run.py（保留現有 .env，不要覆寫密鑰）
-4. 確認 log 有 Logged in，回報結果
-5. 可用 /api status 查看目前 API；切 Gemini：/api preset gemini → /api key → /api test
+3. 編輯 .env（保留現有密鑰，對齊 .env.example 新增欄位）：
+   - LLM_PROVIDER=deepseek（或 gemini）
+   - GEMINI_API_KEY=<私下提供；勿貼回對話>
+   - GEMINI_MODEL=gemini-3.6-flash
+   - LLM_MAX_TOKENS=512（可選）
+   不要用 gemini-2.5-flash（新帳號會 404）
+4. 重啟 bot（tmux/nohup 的 python run.py）
+5. 確認 log 有 Logged in
+6. Discord：/api switch → Gemini · 3.6 Flash → /api test
+7. 回報結果（不要回報完整 API key）
 ```
 
 ---

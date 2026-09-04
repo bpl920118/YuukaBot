@@ -20,10 +20,17 @@ from core.immersion import apply_immersion_marker
 from core.llm_options import parse_depth_arg, parse_model_arg, resolve_depth
 from core.providers import (
     PRESETS,
+    SWITCH_PROFILES,
+    api_key_for_provider,
+    default_base_url,
+    default_model_for_provider,
     detect_provider,
     get_preset,
+    get_switch_profile,
     mask_api_key,
+    model_menu_lines,
     normalize_base_url,
+    normalize_provider_id,
     resolve_model_name,
     supports_thinking,
 )
@@ -33,16 +40,56 @@ from clients.llm import LlmClient, is_near_duplicate
 from db.repository import Repository
 
 
+def _env_default_base(settings) -> str:
+    return default_base_url(
+        settings.llm_provider,
+        deepseek_base_url=settings.deepseek_base_url,
+    )
+
+
+def _env_default_model(settings, provider_id: str) -> str:
+    return default_model_for_provider(
+        provider_id,
+        deepseek_model=settings.deepseek_model,
+        gemini_model=settings.gemini_model,
+        openai_model=settings.openai_model,
+    )
+
+
 def _resolve_guild_endpoint(guild_settings, settings) -> tuple[str, str, str]:
     """Return (base_url, api_key, model) for this guild (.env as fallback)."""
-    base = (guild_settings.llm_api_base_url or "").strip() or settings.deepseek_base_url
-    key = (guild_settings.llm_api_key or "").strip() or settings.deepseek_api_key
+    base_override = (guild_settings.llm_api_base_url or "").strip()
+    base = base_override or _env_default_base(settings)
+    provider = detect_provider(base)
+    key_override = (guild_settings.llm_api_key or "").strip()
+    if key_override:
+        key = key_override
+    else:
+        key, _ = api_key_for_provider(
+            provider,
+            deepseek_api_key=settings.deepseek_api_key,
+            gemini_api_key=settings.gemini_api_key,
+            openai_api_key=settings.openai_api_key,
+        )
+    fallback_model = _env_default_model(settings, provider)
     model = resolve_model_name(
         guild_settings.llm_model,
-        settings.deepseek_model,
+        fallback_model,
         base_url=base,
     )
     return base.rstrip("/"), key, model
+
+
+def _key_source_label(guild_settings, settings, provider: str) -> str:
+    if (guild_settings.llm_api_key or "").strip():
+        return "伺服器 /api key"
+    _, env_name = api_key_for_provider(
+        provider,
+        deepseek_api_key=settings.deepseek_api_key,
+        gemini_api_key=settings.gemini_api_key,
+        openai_api_key=settings.openai_api_key,
+    )
+    return f".env {env_name}"
 
 
 def _speaker_label(user_id: int | None) -> str:
@@ -224,6 +271,7 @@ class ChatPipeline:
             user_text=text or "",
             llm_delta=0,
             score_tags=[],
+            emotion=result.emotion,
         )
         new_affection = await self.scorer.apply(
             guild_id=guild_id,
@@ -550,10 +598,17 @@ class ChatPipeline:
         depth = resolve_depth(guild_settings.llm_depth, settings.deepseek_depth)
         immersion = "開" if guild_settings.llm_immersion else "關"
         provider = detect_provider(base_url)
-        override = "伺服器覆寫" if (
-            (guild_settings.llm_api_base_url or "").strip()
-            or (guild_settings.llm_api_key or "").strip()
-        ) else ".env 預設"
+        preset = get_preset(provider)
+        label = preset.label if preset else provider
+        has_guild_base = bool((guild_settings.llm_api_base_url or "").strip())
+        has_guild_key = bool((guild_settings.llm_api_key or "").strip())
+        has_guild_model = bool((guild_settings.llm_model or "").strip())
+        if has_guild_base or has_guild_key:
+            override = "伺服器 /api 覆寫"
+        else:
+            override = f".env LLM_PROVIDER=`{normalize_provider_id(settings.llm_provider)}`"
+        key_src = _key_source_label(guild_settings, settings, provider)
+        model_src = "伺服器 /model" if has_guild_model else f".env（{provider} 預設）"
         note = ""
         if guild_settings.llm_immersion and (
             depth == "off" or not supports_thinking(base_url)
@@ -563,53 +618,128 @@ class ChatPipeline:
                 f"目前 provider=`{provider}` depth=`{depth}`。"
             )
         return (
-            f"provider=`{provider}`（{override}）\n"
+            f"**{label}**（`{provider}`）· {override}\n"
             f"base=`{base_url}`\n"
-            f"key=`{mask_api_key(api_key)}`\n"
-            f"model=`{model}` depth=`{depth}` 沉浸=`{immersion}`\n"
-            "可用：`/api`、`/model`、`/depth`、`/immersion`。"
+            f"key=`{mask_api_key(api_key)}` ← {key_src}\n"
+            f"model=`{model}` ← {model_src}\n"
+            f"depth=`{depth}` 沉浸=`{immersion}`\n"
+            f"{model_menu_lines(provider)}\n"
+            "切換：`/api switch`（推薦）· `/api help` · `/model` · `/depth`"
             f"{note}"
+        )
+
+    async def api_help(self) -> str:
+        profiles = "\n".join(f"· `{p.label}`" for p in SWITCH_PROFILES.values())
+        return (
+            "**LLM API 怎麼切**\n"
+            "1. `.env` 可同時填 `DEEPSEEK_API_KEY`、`GEMINI_API_KEY`、`OPENAI_API_KEY`\n"
+            "2. Discord 用 `/api switch` 一次選好廠商＋模型（會改用對應 .env 金鑰）\n"
+            "3. `/api test` 確認連線；`/api status` 看目前狀態\n"
+            "4. 只改同廠商模型可用 `/model`（flash／pro／lite）\n"
+            "5. `/api clear` 清掉伺服器覆寫，改回 `.env` 的 `LLM_PROVIDER`\n\n"
+            f"**`/api switch` 選項：**\n{profiles}\n\n"
+            "進階：`/api preset`、`/api url`、`/api key`、`/api model`"
         )
 
     async def set_model(self, guild_id: int, arg: str) -> str:
         settings = get_settings()
         guild_settings = await self.repo.get_or_create_settings(guild_id)
         base_url, _, _ = _resolve_guild_endpoint(guild_settings, settings)
+        provider = detect_provider(base_url)
         raw = (arg or "").strip()
         if not raw:
-            return "請指定模型 id，或別名 `flash`／`pro`（依目前廠商對應）。"
+            return (
+                f"目前廠商 `{provider}`。請指定模型 id，或別名。\n"
+                f"{model_menu_lines(provider)}\n"
+                "換廠商請用 `/api switch`。"
+            )
         # Prefer provider-aware aliases; fall back to legacy DeepSeek parse.
         resolved = resolve_model_name(raw, "", base_url=base_url)
         if not resolved:
             parsed = parse_model_arg(raw)
             if parsed is None:
                 return (
-                    "可用：自由輸入模型 id（例如 `gemini-2.5-flash`），"
-                    "或別名 `flash`／`pro`（依 `/api` 目前廠商）。"
+                    f"目前廠商 `{provider}`，無法辨識 `{raw}`。\n"
+                    f"{model_menu_lines(provider)}\n"
+                    "或用 `/api switch` 一次切廠商＋模型。"
                 )
             resolved = parsed
         guild_settings.llm_model = resolved
         await self.repo.save_settings(guild_settings)
-        return f"已切換模型為 `{resolved}`（僅管理者可改）。"
+        return (
+            f"已切換模型為 `{resolved}`（廠商仍為 `{provider}`）。\n"
+            "若要換 Gemini／DeepSeek／OpenAI，請用 `/api switch`。"
+        )
+
+    async def set_api_switch(self, guild_id: int, profile_id: str) -> str:
+        profile = get_switch_profile(profile_id)
+        if profile is None:
+            names = "、".join(f"`{k}`" for k in SWITCH_PROFILES)
+            return f"未知選項。可用：{names}。或看 `/api help`。"
+        preset = get_preset(profile.provider_id)
+        if preset is None:
+            return "內部錯誤：preset 不存在。"
+        settings = get_settings()
+        guild_settings = await self.repo.get_or_create_settings(guild_id)
+        guild_settings.llm_api_base_url = preset.base_url
+        guild_settings.llm_model = profile.model
+        # Drop guild key so the matching .env slot is used for this provider.
+        guild_settings.llm_api_key = ""
+        await self.repo.save_settings(guild_settings)
+        key, env_name = api_key_for_provider(
+            preset.id,
+            deepseek_api_key=settings.deepseek_api_key,
+            gemini_api_key=settings.gemini_api_key,
+            openai_api_key=settings.openai_api_key,
+        )
+        tip = (
+            f"\n金鑰：已改用 `.env` `{env_name}` → `{mask_api_key(key)}`"
+            if key
+            else (
+                f"\n⚠ `.env` 尚未設定 `{env_name}`。"
+                f"請寫入後重啟 bot，或執行 `/api key`。"
+            )
+        )
+        return (
+            f"已切換：**{profile.label}**\n"
+            f"provider=`{preset.id}` model=`{profile.model}`\n"
+            f"base=`{preset.base_url}`"
+            f"{tip}\n"
+            "建議下一步：`/api test`"
+        )
 
     async def set_api_preset(self, guild_id: int, preset_id: str) -> str:
         preset = get_preset(preset_id)
         if preset is None:
             names = "、".join(f"`{k}`" for k in PRESETS)
-            return f"可用 preset：{names}。自訂請用 `/api url` + `/api key` + `/api model`。"
+            return (
+                f"可用 preset：{names}。\n"
+                "更清楚請用 `/api switch`（一次選廠商＋模型）。"
+            )
+        settings = get_settings()
         guild_settings = await self.repo.get_or_create_settings(guild_id)
         guild_settings.llm_api_base_url = preset.base_url
         guild_settings.llm_model = preset.default_model
-        # Keep existing key unless empty — user may only be switching endpoint.
+        guild_settings.llm_api_key = ""
         await self.repo.save_settings(guild_settings)
-        tip = ""
-        if not (guild_settings.llm_api_key or "").strip():
-            tip = "\n尚未設定本伺服器金鑰：請再執行 `/api key`（或依賴 .env）。"
+        key, env_name = api_key_for_provider(
+            preset.id,
+            deepseek_api_key=settings.deepseek_api_key,
+            gemini_api_key=settings.gemini_api_key,
+            openai_api_key=settings.openai_api_key,
+        )
+        tip = (
+            f"\n金鑰：`.env` `{env_name}` → `{mask_api_key(key)}`"
+            if key
+            else f"\n⚠ 請在 `.env` 填 `{env_name}`，或 `/api key`。"
+        )
         return (
-            f"已切到 `{preset.label}`。\n"
+            f"已切到 **{preset.label}**（預設模型）。\n"
             f"base=`{preset.base_url}`\n"
             f"model=`{preset.default_model}`"
-            f"{tip}"
+            f"{tip}\n"
+            f"同廠商換模型：`/model`（{model_menu_lines(preset.id)}）\n"
+            "或用 `/api switch` 一次選好。"
         )
 
     async def set_api_url(self, guild_id: int, url_raw: str) -> str:
@@ -640,11 +770,18 @@ class ChatPipeline:
         return await self.set_model(guild_id, model_raw)
 
     async def clear_api_override(self, guild_id: int) -> str:
+        settings = get_settings()
         guild_settings = await self.repo.get_or_create_settings(guild_id)
         guild_settings.llm_api_base_url = ""
         guild_settings.llm_api_key = ""
+        guild_settings.llm_model = ""
         await self.repo.save_settings(guild_settings)
-        return "已清除本伺服器 API 覆寫，改回使用 `.env` 的 DEEPSEEK_* 預設。"
+        pid = normalize_provider_id(settings.llm_provider)
+        return (
+            "已清除本伺服器 API／模型覆寫。\n"
+            f"改回 `.env`：`LLM_PROVIDER={pid}`"
+            f"（金鑰用對應的 `DEEPSEEK_API_KEY`／`GEMINI_API_KEY`／`OPENAI_API_KEY`）。"
+        )
 
     async def test_api(self, guild_id: int) -> str:
         settings = get_settings()

@@ -15,15 +15,24 @@ class Settings(BaseSettings):
 
     discord_token: str = ""
 
+    # Default provider when guild has no /api override: deepseek | gemini | openai
+    llm_provider: str = "deepseek"
+
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-v4-flash"
     # Thinking depth when guild override is empty: off | high | max
     deepseek_depth: str = "off"
+
+    # Optional extra providers — /api switch|preset 會依廠商自動選對應金鑰
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-3.6-flash"
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o-mini"
     # Flash chat sampling (ignored by API when thinking is on)
     llm_temperature: float = 1.0
     llm_top_p: float = 0.9
-    llm_max_tokens: int = 768
+    llm_max_tokens: int = 512
 
     # Stable Diffusion WebUI (A1111 / Forge). Empty URL => skip image generation.
     sd_webui_url: str = ""

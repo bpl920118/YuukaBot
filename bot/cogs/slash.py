@@ -81,16 +81,16 @@ class SlashCog(commands.Cog):
 
     # ── teacher: model / depth / api ────────────────────────
 
-    @app_commands.command(name="model", description="查看或切換 LLM 模型（僅管理者）")
+    @app_commands.command(name="model", description="同廠商內切換模型（換 Gemini／DeepSeek 請用 /api switch）")
     @app_commands.describe(
-        choice="快捷別名（依目前廠商）",
-        name="自由輸入模型 id，例如 gemini-2.5-flash",
+        choice="依「目前廠商」對應的別名",
+        name="或直接輸入完整模型 id",
     )
     @app_commands.choices(
         choice=[
-            app_commands.Choice(name="flash（快速）", value="flash"),
-            app_commands.Choice(name="pro（高品質）", value="pro"),
-            app_commands.Choice(name="lite（更省，若廠商有）", value="lite"),
+            app_commands.Choice(name="flash＝日常快速（依目前廠商）", value="flash"),
+            app_commands.Choice(name="pro＝較強／較貴（依目前廠商）", value="pro"),
+            app_commands.Choice(name="lite＝更省（僅 Gemini）", value="lite"),
         ]
     )
     @owner_only()
@@ -160,10 +160,17 @@ class SlashCog(commands.Cog):
         await interaction.response.send_message(text, ephemeral=True)
 
     api = app_commands.Group(
-        name="api", description="切換／設定 OpenAI 相容 LLM API（僅管理者）"
+        name="api",
+        description="切換 LLM 廠商／金鑰（僅管理者）· 推薦用 switch",
     )
 
-    @api.command(name="status", description="查看目前 API 網址／金鑰遮罩／模型")
+    @api.command(name="help", description="說明：多廠商 .env + Discord 怎麼切")
+    @owner_only()
+    async def api_help(self, interaction: discord.Interaction) -> None:
+        text = await self.pipeline.api_help()
+        await interaction.response.send_message(text, ephemeral=True)
+
+    @api.command(name="status", description="查看目前廠商／金鑰來源／模型")
     @owner_only()
     async def api_status(self, interaction: discord.Interaction) -> None:
         gid = await _require_guild(interaction)
@@ -172,13 +179,54 @@ class SlashCog(commands.Cog):
         text = await self.pipeline.describe_llm(gid)
         await interaction.response.send_message(text, ephemeral=True)
 
-    @api.command(name="preset", description="一鍵切到常見廠商（會改 base＋預設模型）")
-    @app_commands.describe(choice="廠商预设")
+    @api.command(
+        name="switch",
+        description="一鍵切換：廠商＋模型（會改用對應 .env 金鑰）",
+    )
+    @app_commands.describe(choice="選完整組合（最清楚）")
     @app_commands.choices(
         choice=[
-            app_commands.Choice(name="DeepSeek", value="deepseek"),
-            app_commands.Choice(name="Gemini（OpenAI 相容）", value="gemini"),
-            app_commands.Choice(name="OpenAI", value="openai"),
+            app_commands.Choice(
+                name="DeepSeek · V4 Flash（日常）", value="deepseek-flash"
+            ),
+            app_commands.Choice(
+                name="DeepSeek · V4 Pro（重推理）", value="deepseek-pro"
+            ),
+            app_commands.Choice(
+                name="Gemini · 3.6 Flash（日常・建議）", value="gemini-flash"
+            ),
+            app_commands.Choice(
+                name="Gemini · 3.5 Flash Lite（更省）", value="gemini-lite"
+            ),
+            app_commands.Choice(
+                name="Gemini · 3.1 Pro Preview（高品質）", value="gemini-pro"
+            ),
+            app_commands.Choice(name="OpenAI · gpt-4o-mini", value="openai-mini"),
+            app_commands.Choice(name="OpenAI · gpt-4o", value="openai-pro"),
+        ]
+    )
+    @owner_only()
+    async def api_switch(
+        self,
+        interaction: discord.Interaction,
+        choice: app_commands.Choice[str],
+    ) -> None:
+        gid = await _require_guild(interaction)
+        if gid is None:
+            return
+        text = await self.pipeline.set_api_switch(gid, choice.value)
+        await interaction.response.send_message(text, ephemeral=True)
+
+    @api.command(
+        name="preset",
+        description="只切廠商（用該廠商預設模型）· 更細請用 switch",
+    )
+    @app_commands.describe(choice="廠商")
+    @app_commands.choices(
+        choice=[
+            app_commands.Choice(name="DeepSeek（預設 V4 Flash）", value="deepseek"),
+            app_commands.Choice(name="Gemini（預設 3.6 Flash）", value="gemini"),
+            app_commands.Choice(name="OpenAI（預設 gpt-4o-mini）", value="openai"),
         ]
     )
     @owner_only()
@@ -193,7 +241,7 @@ class SlashCog(commands.Cog):
         text = await self.pipeline.set_api_preset(gid, choice.value)
         await interaction.response.send_message(text, ephemeral=True)
 
-    @api.command(name="url", description="設定自訂 API base（OpenAI 相容）")
+    @api.command(name="url", description="進階：自訂 API base（OpenAI 相容）")
     @app_commands.describe(
         url="例如 https://api.deepseek.com 或 Gemini 的 …/v1beta/openai"
     )
@@ -205,7 +253,7 @@ class SlashCog(commands.Cog):
         text = await self.pipeline.set_api_url(gid, url)
         await interaction.response.send_message(text, ephemeral=True)
 
-    @api.command(name="key", description="設定本伺服器 API 金鑰（僅你看得到）")
+    @api.command(name="key", description="進階：本伺服器覆寫金鑰（通常用 .env 即可）")
     @app_commands.describe(key="廠商 API key（勿在公開頻道貼）")
     @owner_only()
     async def api_key(self, interaction: discord.Interaction, key: str) -> None:
@@ -215,8 +263,8 @@ class SlashCog(commands.Cog):
         text = await self.pipeline.set_api_key(gid, key)
         await interaction.response.send_message(text, ephemeral=True)
 
-    @api.command(name="model", description="設定模型 id（可自由輸入）")
-    @app_commands.describe(name="例如 gemini-2.5-flash / deepseek-v4-flash / gpt-4o-mini")
+    @api.command(name="model", description="進階：自由輸入模型 id（日常用 /model 或 switch）")
+    @app_commands.describe(name="例如 gemini-3.6-flash / deepseek-v4-flash")
     @owner_only()
     async def api_model(self, interaction: discord.Interaction, name: str) -> None:
         gid = await _require_guild(interaction)
@@ -225,7 +273,7 @@ class SlashCog(commands.Cog):
         text = await self.pipeline.set_api_model(gid, name)
         await interaction.response.send_message(text, ephemeral=True)
 
-    @api.command(name="clear", description="清除伺服器 API 覆寫，改回 .env")
+    @api.command(name="clear", description="清除伺服器覆寫，改回 .env 的 LLM_PROVIDER")
     @owner_only()
     async def api_clear(self, interaction: discord.Interaction) -> None:
         gid = await _require_guild(interaction)
