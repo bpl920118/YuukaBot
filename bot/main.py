@@ -44,10 +44,15 @@ def strip_mentions(message: discord.Message, bot_user: discord.ClientUser) -> st
 
 
 def parse_paren_command(text: str) -> str | None:
-    stripped = text.strip()
-    if not (stripped.startswith("(") or stripped.startswith("（")):
+    """Extract teacher command inside （…） or (...). Uses the first line only."""
+    stripped = (text or "").strip()
+    if not stripped:
         return None
-    return stripped.lstrip("(（").rstrip(")）").strip()
+    first_line = stripped.splitlines()[0].strip()
+    m = re.search(r"[（(]\s*(.+?)\s*[）)]", first_line)
+    if not m:
+        return None
+    return m.group(1).strip()
 
 
 async def is_reply_to_bot(message: discord.Message, bot_user: discord.ClientUser) -> bool:
