@@ -12,13 +12,24 @@ from clients.llm import LlmClient
 from db.repository import Repository
 
 
-def _user_message_payload(display_name: str, text: str) -> str:
-    name = (display_name or "未知").strip() or "未知"
+def _speaker_label(user_id: int | None, *, is_teacher: bool) -> str:
+    if is_teacher:
+        return "老師"
+    if user_id is None:
+        return "成員"
+    return f"成員{str(user_id)[-4:]}"
+
+
+def _user_message_payload(
+    *,
+    user_id: int | None,
+    text: str,
+    is_teacher: bool,
+) -> str:
+    """Never send Discord display names — nicknames are often treated as dialogue."""
+    label = _speaker_label(user_id, is_teacher=is_teacher)
     body = text if text.strip() else "（只呼叫了你）"
-    return (
-        f"發言者暱稱：{name}（僅辨識用，不是對話內容）\n"
-        f"訊息：{body}"
-    )
+    return f"[{label}] {body}"
 
 
 class ChatPipeline:
@@ -67,14 +78,18 @@ class ChatPipeline:
         history = await self.repo.recent_messages(
             guild_id, limit=settings.memory_limit, character_id=self.character_id
         )
+        teacher_id = settings.teacher_user_id
         messages = []
         for m in history:
             if m.role == "user":
+                uid = m.user_id
                 messages.append(
                     {
                         "role": "user",
                         "content": _user_message_payload(
-                            m.display_name or str(m.user_id), m.content
+                            user_id=uid,
+                            text=m.content,
+                            is_teacher=bool(uid is not None and uid == teacher_id),
                         ),
                     }
                 )
@@ -85,7 +100,9 @@ class ChatPipeline:
             {
                 "role": "user",
                 "content": _user_message_payload(
-                    display_name, text if text.strip() else "（只呼叫了你）"
+                    user_id=user_id,
+                    text=text if text.strip() else "（只呼叫了你）",
+                    is_teacher=is_teacher,
                 ),
             }
         )
