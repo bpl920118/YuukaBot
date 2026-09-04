@@ -218,14 +218,22 @@ async def handle_message(bot: YuukaBot, message: discord.Message) -> None:
         await bot.process_commands(message)
         return
 
-    now = time.monotonic()
-    last = bot._user_cooldown.get(message.author.id, 0.0)
-    if now - last < bot.settings.user_chat_cooldown_seconds:
-        return
-    bot._user_cooldown[message.author.id] = now
-
     text = strip_mentions(message, bot.user)
     is_teacher = message.author.id == bot.settings.teacher_user_id
+    paren = parse_paren_command(text)
+    is_teacher_cmd = bool(is_teacher and paren)
+
+    # Teacher （…） commands must never be silently dropped by cooldown.
+    if not is_teacher_cmd:
+        now = time.monotonic()
+        last = bot._user_cooldown.get(message.author.id, 0.0)
+        if now - last < bot.settings.user_chat_cooldown_seconds:
+            return
+        bot._user_cooldown[message.author.id] = now
+
+    if is_teacher and paren in ("狀態", "ping", "在嗎"):
+        await message.reply("在。老師指令可用。", mention_author=False)
+        return
 
     if await maybe_clear_channel_messages(bot, message, text, is_teacher):
         await bot.process_commands(message)
