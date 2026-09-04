@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     deepseek_model: str = "deepseek-v4-flash"
     # Thinking depth when guild override is empty: off | high | max
     deepseek_depth: str = "off"
+    # Flash chat sampling (ignored by API when thinking is on)
+    llm_temperature: float = 0.8
+    llm_top_p: float = 0.9
+    llm_max_tokens: int = 768
 
     # Stable Diffusion WebUI (A1111 / Forge). Empty URL => skip image generation.
     sd_webui_url: str = ""

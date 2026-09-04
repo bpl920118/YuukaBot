@@ -55,10 +55,10 @@ Verify logs show `Logged in as ...` and command sync.
    - Start A1111 / Forge with **API + listen**, e.g. `--api --listen` (port `7860`).
    - Load checkpoint matching `SD_WEBUI_CHECKPOINT` (default `kivotos-xl-2.0.safetensors`).
 2. After Grok has pulled latest code and restarted the bot, in Discord as teacher:
-   - `@bot （生圖網址 http://YOUR_TAILSCALE_IP:7860）`
-   - `@bot （生圖狀態）` → should show OK
+   - `/image url` → `http://YOUR_TAILSCALE_IP:7860`
+   - `/image status` → should show OK
 3. Alternate: set `SD_WEBUI_URL` in cloud `.env` and restart (no Discord command needed).
-4. To disable: `@bot （關閉生圖）` or clear env URL.
+4. To disable: `/image off` or clear env URL.
 
 Grok cloud must reach the home WebUI over Tailscale (or another reachable URL). Cursor itself never receives Discord image jobs.
 

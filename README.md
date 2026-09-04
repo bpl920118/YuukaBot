@@ -33,29 +33,40 @@ Discord Developer Portal 請開啟 **Message Content Intent**。
 人設全文在 [`characters/yuuka-system-prompt.txt`](characters/yuuka-system-prompt.txt)。  
 角色與風格錨點在 [`characters/yuuka.yaml`](characters/yuuka.yaml)。
 
-## 指令
+## 指令（斜線 `/`）
 
-- `/gallery` 本伺服器最近 CG
+在頻道輸入 `/` 即可從選單選指令（含說明文字）。對話仍用 `@` 機器人或回覆她的訊息。
 
-老師用半形 `(` 或全形 `（` 開頭下設定（僅 `TEACHER_USER_ID`）：
+### 公開
 
-- `（模型）` 查看目前模型／深度
-- `（模型 flash）` / `（模型 pro）` 切換模型
-- `（深度 關）` / `（深度 high）` / `（深度 max）` 切換思考深度
-- `（生圖狀態）` 測試 WebUI 是否連得上
-- `（生圖網址 http://100.x.y.z:7860）` 設定生圖 API（Tailscale）
-- `（關閉生圖）` 關閉本伺服器生圖覆寫
-- `（測試生圖）` 強制出一張測試 CG（不等模型觸發）
-- `（清除對話）` 清除本伺服器 **bot 記憶**（資料庫）
-- `（清除頻道）` / `（清除頻道 100）` 刪除本頻道最近訊息（需「管理訊息」）
-- `（清除頻道 從10:55）` 從今天該時間起刪到現在
-- 回覆劇情第一則後 `@bot （清除頻道 從此）` 從那則起刪
-- `（清除機器人訊息）` 只刪 bot 自己發過的訊息
-- `（清除圖庫）` 清除本伺服器 CG 資料庫紀錄
-- `（清除叠加）` 清除老師叠加設定
-- 鎖定／關閉人設等其餘設定同前
+| 指令 | 說明 |
+|------|------|
+| `/gallery` | 本伺服器最近 CG |
+| `/ping` | 測試機器人是否在線 |
 
-清除頻道訊息時，bot 需要 Discord 權限 **Manage Messages（管理訊息）**。超過 14 天的訊息無法批次刪除。
+對話裡每位成員都會被當成「老師」稱呼；下列設定指令仍僅 `TEACHER_USER_ID`（管理者）可用。
+
+| 指令 | 說明 |
+|------|------|
+| `/model` | 查看或切換模型（`flash` / `pro`） |
+| `/depth` | 查看或切換深度（`關` / `high` / `max`） |
+| `/image status` | 測試 WebUI 是否連得上 |
+| `/image url` | 設定生圖 API（Tailscale 等） |
+| `/image off` | 關閉本伺服器生圖覆寫 |
+| `/image test` | 強制出一張測試 CG |
+| `/clear memory` | 清除本伺服器 bot 對話記憶 |
+| `/clear gallery` | 清除 CG 資料庫紀錄 |
+| `/clear layers` | 清除老師叠加設定 |
+| `/clear channel` | 刪本頻道訊息（可填 `limit` / `after_time` / `after_message_id`） |
+| `/clear bot` | 只刪 bot 自己發過的訊息 |
+| `/mode lock` | 之後只回應管理者本人 |
+| `/mode unlock` | 解除鎖定 |
+| `/mode work` | 工作模式（關閉人設） |
+| `/mode persona` | 恢復優香人設 |
+| `/note` | 叠加一則老師設定 |
+
+清除頻道訊息時，bot 需要 Discord 權限 **Manage Messages（管理訊息）**。超過 14 天的訊息無法批次刪除。  
+從某則訊息起刪：在 Discord 開啟「開發者模式」→ 右鍵訊息「複製訊息 ID」→ 填入 `/clear channel` 的 `after_message_id`。
 
 ## CG 兩階段
 

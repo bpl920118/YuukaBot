@@ -45,7 +45,7 @@ class WebuiClient:
     async def health(self, *, base_url: str | None = None) -> tuple[bool, str]:
         url = self.resolve_url(base_url)
         if not url:
-            return False, "未設定生圖網址（SD_WEBUI_URL / （生圖網址））。"
+            return False, "未設定生圖網址（SD_WEBUI_URL / `/image url`）。"
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
                 resp = await client.get(f"{url}/sdapi/v1/sd-models")
