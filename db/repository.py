@@ -11,6 +11,17 @@ from config import get_settings
 from db.models import Base, GalleryItem, GuildBond, GuildSetting, Message, ScoreEvent
 
 
+def trailing_orphan_user_ids(rows_newest_first: list[tuple[int, str]]) -> list[int]:
+    """Return ids of newest consecutive user messages before any assistant."""
+    orphan_ids: list[int] = []
+    for msg_id, role in rows_newest_first:
+        if role == "user":
+            orphan_ids.append(int(msg_id))
+        else:
+            break
+    return orphan_ids
+
+
 class Repository:
     def __init__(self) -> None:
         settings = get_settings()
@@ -128,6 +139,36 @@ class Repository:
             )
             rows = list(await session.scalars(stmt))
             return list(reversed(rows))
+
+    async def drop_trailing_orphan_user_messages(
+        self, guild_id: int, character_id: str = "yuuka", *, lookback: int = 64
+    ) -> int:
+        """Delete newest consecutive user rows that have no following assistant reply.
+
+        Soft-fallback / empty LLM turns must not leave the triggering user line in
+        memory, or later turns keep replaying poisoned context.
+        """
+        async with self.session() as session:
+            stmt: Select[tuple[Message]] = (
+                select(Message)
+                .where(
+                    Message.guild_id == guild_id,
+                    Message.character_id == character_id,
+                )
+                .order_by(Message.id.desc())
+                .limit(max(1, lookback))
+            )
+            rows = list(await session.scalars(stmt))
+            orphan_ids = trailing_orphan_user_ids(
+                [(int(msg.id), msg.role) for msg in rows]
+            )
+            if not orphan_ids:
+                return 0
+            result = await session.execute(
+                delete(Message).where(Message.id.in_(orphan_ids))
+            )
+            await session.commit()
+            return int(result.rowcount or 0)
 
     async def clear_messages(
         self, guild_id: int, character_id: str = "yuuka"

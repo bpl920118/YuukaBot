@@ -143,6 +143,10 @@ class ChatPipeline:
                 "pending_cg": None,
             }
 
+        # Heal leftovers from older soft-fallback turns that saved user without reply.
+        await self.repo.drop_trailing_orphan_user_messages(
+            guild_id, self.character_id
+        )
         history = await self.repo.recent_messages(
             guild_id, limit=settings.memory_limit, character_id=self.character_id
         )
@@ -237,6 +241,19 @@ class ChatPipeline:
         elif is_soft_fallback(result.reply):
             used_soft_fallback = True
 
+        # Unrecoverable turn: do not write user or assistant into memory, and drop any
+        # trailing orphan user lines so the next turn does not keep the bad context.
+        if used_soft_fallback:
+            await self.repo.drop_trailing_orphan_user_messages(
+                guild_id, self.character_id
+            )
+            return {
+                "reply": result.reply,
+                "emotion": result.emotion,
+                "image_path": None,
+                "pending_cg": None,
+            }
+
         await self.repo.add_message(
             guild_id=guild_id,
             role="user",
@@ -245,14 +262,12 @@ class ChatPipeline:
             display_name=display_name,
             character_id=self.character_id,
         )
-        # Do not persist canned soft-fallbacks — they poison memory and feel ice-cold.
-        if not used_soft_fallback:
-            await self.repo.add_message(
-                guild_id=guild_id,
-                role="assistant",
-                content=result.reply,
-                character_id=self.character_id,
-            )
+        await self.repo.add_message(
+            guild_id=guild_id,
+            role="assistant",
+            content=result.reply,
+            character_id=self.character_id,
+        )
 
         if work_mode:
             return {
