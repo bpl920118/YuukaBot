@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 
@@ -41,6 +42,13 @@ def strip_mentions(message: discord.Message, bot_user: discord.ClientUser) -> st
     return content.strip()
 
 
+def parse_paren_command(text: str) -> str | None:
+    stripped = text.strip()
+    if not (stripped.startswith("(") or stripped.startswith("（")):
+        return None
+    return stripped.lstrip("(（").rstrip(")）").strip()
+
+
 async def is_reply_to_bot(message: discord.Message, bot_user: discord.ClientUser) -> bool:
     if message.reference is None:
         return False
@@ -54,6 +62,85 @@ async def is_reply_to_bot(message: discord.Message, bot_user: discord.ClientUser
         except (discord.NotFound, discord.HTTPException):
             return False
     return False
+
+
+async def maybe_clear_channel_messages(
+    bot: YuukaBot, message: discord.Message, text: str, is_teacher: bool
+) -> bool:
+    """Teacher-only: delete messages already posted in this channel. Returns True if handled."""
+    body = parse_paren_command(text)
+    if body is None:
+        return False
+
+    bot_only = False
+    limit = 50
+    if body.startswith("清除機器人訊息") or body.startswith("刪除機器人訊息"):
+        bot_only = True
+        rest = body.replace("清除機器人訊息", "", 1).replace("刪除機器人訊息", "", 1).strip()
+    elif body.startswith("清除頻道") or body.startswith("刪除頻道"):
+        rest = body.replace("清除頻道", "", 1).replace("刪除頻道", "", 1).strip()
+    else:
+        return False
+
+    if not is_teacher:
+        await message.reply("清除頻道訊息只有老師可以使用。", mention_author=False)
+        return True
+
+    if not isinstance(message.channel, discord.TextChannel):
+        await message.reply("只能在文字頻道清除訊息。", mention_author=False)
+        return True
+
+    if rest:
+        m = re.search(r"\d+", rest)
+        if m:
+            limit = max(1, min(200, int(m.group(0))))
+
+    me = message.guild.me if message.guild else None
+    perms = message.channel.permissions_for(me) if me else None
+
+    if bot_only:
+        if perms is not None and not (perms.manage_messages or perms.administrator):
+            deleted = 0
+            async for msg in message.channel.history(limit=limit * 3):
+                if bot.user is not None and msg.author.id == bot.user.id:
+                    try:
+                        await msg.delete()
+                        deleted += 1
+                    except discord.HTTPException:
+                        pass
+                    if deleted >= limit:
+                        break
+            await message.channel.send(f"已刪除機器人訊息約 {deleted} 則。")
+            return True
+    else:
+        if perms is None or not (perms.manage_messages or perms.administrator):
+            await message.reply(
+                "我沒有「管理訊息」權限，無法大量刪除頻道訊息。"
+                "請在邀請／頻道權限幫我勾 Manage Messages。",
+                mention_author=False,
+            )
+            return True
+
+    def check(msg: discord.Message) -> bool:
+        if bot_only:
+            return bot.user is not None and msg.author.id == bot.user.id
+        return True
+
+    try:
+        deleted = await message.channel.purge(limit=limit, check=check)
+    except discord.Forbidden:
+        await message.channel.send("權限不足，無法刪除訊息。")
+        return True
+    except discord.HTTPException as exc:
+        await message.channel.send(f"刪除失敗：`{exc}`")
+        return True
+
+    kind = "機器人訊息" if bot_only else "頻道訊息"
+    await message.channel.send(
+        f"已刪除{kind} {len(deleted)} 則"
+        f"（上限 {limit}；超過 14 天的訊息 Discord 不允許批次刪）。"
+    )
+    return True
 
 
 async def handle_message(bot: YuukaBot, message: discord.Message) -> None:
@@ -77,6 +164,10 @@ async def handle_message(bot: YuukaBot, message: discord.Message) -> None:
 
     text = strip_mentions(message, bot.user)
     is_teacher = message.author.id == bot.settings.teacher_user_id
+
+    if await maybe_clear_channel_messages(bot, message, text, is_teacher):
+        await bot.process_commands(message)
+        return
 
     async with message.channel.typing():
         try:
