@@ -45,6 +45,7 @@ Discord Developer Portal 請開啟 **Message Content Intent**。
 - `（生圖狀態）` 測試 WebUI 是否連得上
 - `（生圖網址 http://100.x.y.z:7860）` 設定生圖 API（Tailscale）
 - `（關閉生圖）` 關閉本伺服器生圖覆寫
+- `（測試生圖）` 強制出一張測試 CG（不等模型觸發）
 - 鎖定／關閉人設等其餘設定同前
 
 ## CG 兩階段

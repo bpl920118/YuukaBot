@@ -43,6 +43,8 @@ class ChatPipeline:
             guild_id, user_id, text, guild_settings, is_teacher
         )
         if command_reply is not None:
+            if isinstance(command_reply, dict):
+                return command_reply
             return {"reply": command_reply, "emotion": "neutral", "image_path": None}
 
         work_mode = bool(guild_settings.work_mode)
@@ -243,6 +245,45 @@ class ChatPipeline:
             guild_settings.sd_webui_url = ""
             await self.repo.save_settings(guild_settings)
             return "已關閉本伺服器生圖覆寫（改回 .env；若 .env 也空白則不出圖）。"
+
+        if body in ("測試生圖", "生圖測試"):
+            scene = {
+                "character": "Yuuka",
+                "location": "millennium science school classroom, desk, window light",
+                "time": "afternoon",
+                "action": "sitting at desk, holding calculator, looking at viewer",
+                "expression": "slight smile, half-closed eyes",
+                "mood": "calm, soft lighting",
+            }
+            prompt = build_image_prompt(scene, self.character_id)
+            try:
+                image_path = await self.webui.generate(
+                    prompt=prompt,
+                    tier="normal",
+                    guild_id=guild_id,
+                    base_url=guild_settings.sd_webui_url or None,
+                )
+            except Exception as exc:
+                return f"測試生圖失敗：`{type(exc).__name__}: {exc}`"
+            if not image_path:
+                ok, detail = await self.webui.health(
+                    base_url=guild_settings.sd_webui_url or None
+                )
+                return f"沒有產出圖片。請先確認生圖網址。\n{detail}"
+            await self.repo.add_gallery(
+                guild_id=guild_id,
+                path=str(image_path),
+                prompt=prompt,
+                tier="normal",
+                emotion="neutral",
+                triggered_by_user_id=user_id,
+                character_id=self.character_id,
+            )
+            return {
+                "reply": "測試生圖完成。",
+                "emotion": "neutral",
+                "image_path": str(image_path),
+            }
 
         if any(k in body for k in ("只回老師", "不要回其他人", "鎖定")):
             guild_settings.locked_to_teacher = 1
