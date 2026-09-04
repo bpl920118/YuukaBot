@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from config import get_settings
-from core.prompt_builder import build_image_prompt
+from core.prompt_builder import build_image_prompt, heuristic_image_tags
 from core.schemas import (
     build_runtime_system,
     is_soft_fallback,
@@ -361,21 +361,25 @@ class ChatPipeline:
         if not effective_url:
             return None
 
-        image_prompt = result.image_prompt
-        scene_dump = result.cg_scene.model_dump() if result.cg_scene else None
-        if not self._has_cg_keywords(result):
-            image_prompt = await self._infer_image_prompt(
-                messages,
-                result.reply,
-                guild_settings=guild_settings,
-            )
-            scene_dump = None
+        # Score-unlock / force CG must match THIS reply's beat.
+        # Chat-turn image_prompt is often null (trigger_cg=false) or generic office.
+        image_prompt = await self._infer_image_prompt(
+            messages,
+            result.reply,
+            guild_settings=guild_settings,
+        )
+        scene_dump = None
+        if not (image_prompt or "").strip():
+            image_prompt = heuristic_image_tags(result.reply, result.emotion)
+        if not (image_prompt or "").strip() and self._has_cg_keywords(result):
+            image_prompt = result.image_prompt
+            scene_dump = result.cg_scene.model_dump() if result.cg_scene else None
         if not (image_prompt or "").strip() and not scene_dump:
-            # Last-resort visual beat from emotion / reply.
+            # Last resort: still bias toward the reply emotion, not a frozen audit pose.
             scene_dump = {
-                "location": "millennium student council office, desk, paperwork",
+                "location": "millennium student council office, desk",
                 "time": "afternoon",
-                "action": "holding calculator, looking at viewer",
+                "action": "sitting at desk, reacting to teacher",
                 "expression": result.emotion or "neutral",
                 "mood": "soft indoor light",
             }
@@ -399,19 +403,22 @@ class ChatPipeline:
         *,
         guild_settings=None,
     ) -> str | None:
-        """Ask LLM for English SD tags from recent dialogue + this reply."""
+        """Ask LLM for English SD tags from the latest assistant beat."""
         snippet = []
-        for m in messages[-6:]:
+        for m in messages[-4:]:
             role = m.get("role")
             content = (m.get("content") or "").strip()
             if role and content:
-                snippet.append(f"{role}: {content[:200]}")
-        snippet.append(f"assistant: {reply[:300]}")
+                snippet.append(f"{role}: {content[:180]}")
+        snippet.append(f"assistant_latest: {reply[:400]}")
         system = (
             "只輸出合法 JSON（不要 markdown）："
             '{"reply":".","emotion":"neutral","trigger_cg":true,"cg_tier":"normal",'
-            '"cg_scene":null,"image_prompt":"english danbooru tags for the latest Yuuka beat"}。'
-            "image_prompt 必須是英文短標籤，對應對話最後畫面；禁止中文、禁止 NSFW、禁止解釋。"
+            '"cg_scene":null,"image_prompt":"english danbooru tags"}。'
+            "image_prompt 必須緊扣 assistant_latest 這一則畫面："
+            "道具（紙杯／拿鐵／表單等）、動作（接過／碰手／縮手）、表情都要出現。"
+            "禁止偷換成無關的『托腮看鏡頭／只有計算機對帳』，除非最新對白真的在對帳。"
+            "禁止中文、禁止 NSFW、禁止解釋；8～20 個英文短標籤。"
         )
         settings = get_settings()
         api_key = None

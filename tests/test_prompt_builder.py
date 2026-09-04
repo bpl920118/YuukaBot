@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from core.prompt_builder import build_image_prompt
+from core.prompt_builder import build_image_prompt, heuristic_image_tags
 from core.schemas import LlmChatResult
 
 
@@ -21,15 +21,29 @@ def test_build_from_cg_scene() -> None:
         {
             "location": "millennium classroom",
             "time": "afternoon",
-            "action": "holding calculator",
+            "action": "sitting at desk",
             "expression": "slight smile",
             "mood": "calm",
         },
         "yuuka",
     )
     assert "millennium classroom" in prompt
-    assert "holding calculator" in prompt
+    assert "sitting at desk" in prompt
     assert "solo, looking at viewer" in prompt
+
+
+def test_heuristic_matches_latte_beat() -> None:
+    tags = heuristic_image_tags(
+        "（接過紙杯，指尖不小心碰到，立刻縮回手）……熱的就熱的。謝謝老師……這筆熱拿鐵我先記行政開銷。",
+        "flustered",
+    )
+    assert tags is not None
+    assert "latte" in tags or "cup" in tags
+    assert "calculator" not in tags
+    prompt = build_image_prompt(None, "yuuka", image_prompt=tags)
+    assert "latte" in prompt or "cup" in prompt
+    # Identity anchor should not force calculator into every CG.
+    assert "calculator" not in prompt
 
 
 def test_llm_result_accepts_image_prompt() -> None:

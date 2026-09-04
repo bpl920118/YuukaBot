@@ -110,13 +110,13 @@ EXAMPLE JSON（畫面感強——仍只填關鍵字；是否真的出圖由本�
 - emotion：neutral|happy|shy|sad|angry|flustered|tired|proud（sad＝不開心／失望；angry＝真的生氣。本地會依情緒調整好感，對白不要提分數）
 - trigger_cg：僅表示「這則畫面夠不夠當 CG 關鍵字」。預設 false。本地會依伺服器共用分數決定要不要真的生圖；你不要在 reply 宣佈出圖
 - cg_tier：none|normal|special（special 僅極重要時刻；一般用 normal）
-- cg_scene：trigger_cg=false 時必須 null；true 時填英文標籤（location/time/action/expression/mood）。外貌錨點由本地補，不要重複長串外貌
-- image_prompt：可選英文 SD／Danbooru 關鍵字；有填時優先。禁止中文、禁止 NSFW。trigger_cg=false 時必須 null
+- cg_scene：trigger_cg=false 時通常 null；true 時填英文標籤（location/time/action/expression/mood）。外貌錨點由本地補，不要重複長串外貌
+- image_prompt：可選英文 SD／Danbooru 關鍵字；有填時優先。禁止中文、禁止 NSFW。畫面清楚時（紙杯拿鐵、碰手、臉紅等）即使 trigger_cg=false 也可填當下道具／動作，方便本地達分生圖對上劇情
 
 生圖關鍵字規則：
-1. 畫面清楚時請填關鍵字（對應當下 reply）；不要憑空換場景。
+1. 關鍵字必須對應當下 reply 的道具與動作；不要憑空換成「只有計算機／托腮對帳」。
 2. 用英文短標籤。是否送進 SD 由本地分數／管理者指令決定。
-3. 大多數回合 trigger_cg=false 即可。
+3. 大多數回合 trigger_cg=false 即可；有明顯道具互動時仍建議填 image_prompt。
 """.strip()
 
 
