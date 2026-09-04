@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from config import get_settings
+from core.llm_options import resolve_depth, resolve_model
 from core.schemas import LlmChatResult
 
 
@@ -16,8 +17,16 @@ class LlmClient:
         self.api_key = s.deepseek_api_key
         self.base_url = s.deepseek_base_url.rstrip("/")
         self.model = s.deepseek_model
+        self.depth = s.deepseek_depth
 
-    async def chat(self, *, system: str, messages: list[dict[str, str]]) -> str:
+    async def chat(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, str]],
+        model: str | None = None,
+        depth: str | None = None,
+    ) -> str:
         if not self.api_key:
             # Offline stub for local wiring tests
             return json.dumps(
@@ -31,18 +40,28 @@ class LlmClient:
                 ensure_ascii=False,
             )
 
-        payload = {
-            "model": self.model,
+        use_model = resolve_model(model, self.model)
+        use_depth = resolve_depth(depth, self.depth)
+
+        payload: dict[str, Any] = {
+            "model": use_model,
             "messages": [{"role": "system", "content": system}, *messages],
             "temperature": 0.8,
             "response_format": {"type": "json_object"},
         }
+        if use_depth == "off":
+            payload["thinking"] = {"type": "disabled"}
+        else:
+            payload["thinking"] = {"type": "enabled"}
+            payload["reasoning_effort"] = use_depth  # high | max
+
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
         url = f"{self.base_url}/v1/chat/completions"
-        async with httpx.AsyncClient(timeout=90.0) as client:
+        timeout = 180.0 if use_depth != "off" else 90.0
+        async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
             data = resp.json()

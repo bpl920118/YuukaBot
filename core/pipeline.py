@@ -6,7 +6,8 @@ from config import get_settings
 from core.prompt_builder import build_image_prompt
 from core.schemas import build_runtime_system
 from core.character import load_character, load_system_prompt
-from clients.webui import WebuiClient
+from core.llm_options import parse_depth_arg, parse_model_arg, resolve_depth, resolve_model
+from clients.webui import WebuiClient, normalize_webui_url
 from clients.llm import LlmClient
 from db.repository import Repository
 
@@ -73,7 +74,11 @@ class ChatPipeline:
             is_teacher=is_teacher,
         )
 
-        raw = await self.llm.chat(system=system, messages=messages)
+        model = resolve_model(guild_settings.llm_model, settings.deepseek_model)
+        depth = resolve_depth(guild_settings.llm_depth, settings.deepseek_depth)
+        raw = await self.llm.chat(
+            system=system, messages=messages, model=model, depth=depth
+        )
         result = self.llm.parse_result(raw)
 
         await self.repo.add_message(
@@ -110,6 +115,7 @@ class ChatPipeline:
                 prompt=prompt,
                 tier=tier,
                 guild_id=guild_id,
+                base_url=guild_settings.sd_webui_url or None,
             )
             if image_path:
                 await self.repo.add_gallery(
@@ -167,6 +173,77 @@ class ChatPipeline:
             return "設定指令只有老師可以使用。"
 
         body = stripped.lstrip("(（").rstrip(")）").strip()
+        settings = get_settings()
+
+        if body in ("模型", "查看模型", "模型設定", "深度", "查看深度"):
+            model = resolve_model(guild_settings.llm_model, settings.deepseek_model)
+            depth = resolve_depth(guild_settings.llm_depth, settings.deepseek_depth)
+            return (
+                f"目前模型=`{model}`，深度=`{depth}`。\n"
+                "老師可設定：`（模型 flash）` / `（模型 pro）`；"
+                "`（深度 關）` / `（深度 high）` / `（深度 max）`。"
+            )
+
+        if body.startswith("模型"):
+            arg = body[2:].strip()
+            if not arg:
+                model = resolve_model(guild_settings.llm_model, settings.deepseek_model)
+                depth = resolve_depth(guild_settings.llm_depth, settings.deepseek_depth)
+                return f"目前模型=`{model}`，深度=`{depth}`。"
+            parsed = parse_model_arg(arg)
+            if parsed is None:
+                return "可用模型：`flash`（deepseek-v4-flash）、`pro`（deepseek-v4-pro）。"
+            guild_settings.llm_model = parsed
+            await self.repo.save_settings(guild_settings)
+            return f"已切換模型為 `{parsed}`（僅老師可改）。"
+
+        if body.startswith("深度"):
+            arg = body[2:].strip()
+            if not arg:
+                model = resolve_model(guild_settings.llm_model, settings.deepseek_model)
+                depth = resolve_depth(guild_settings.llm_depth, settings.deepseek_depth)
+                return f"目前模型=`{model}`，深度=`{depth}`。"
+            parsed = parse_depth_arg(arg)
+            if parsed is None:
+                return "可用深度：`關`（off）、`high`、`max`。"
+            guild_settings.llm_depth = parsed
+            await self.repo.save_settings(guild_settings)
+            return f"已切換深度為 `{parsed}`（僅老師可改）。"
+
+        if body in ("生圖", "生圖狀態", "查看生圖"):
+            effective = (guild_settings.sd_webui_url or "").strip() or (
+                settings.sd_webui_url or ""
+            ).strip() or "（未設定）"
+            ok, detail = await self.webui.health(
+                base_url=guild_settings.sd_webui_url or None
+            )
+            flag = "OK" if ok else "NG"
+            return (
+                f"生圖狀態 `{flag}`\n"
+                f"有效網址：`{effective}`\n"
+                f"{detail}\n"
+                "設定：`（生圖網址 http://100.x.y.z:7860）`；關閉：`（關閉生圖）`。"
+            )
+
+        if body.startswith("生圖網址"):
+            arg = body[4:].strip()
+            if not arg:
+                return "用法：`（生圖網址 http://100.x.y.z:7860）`"
+            try:
+                url = normalize_webui_url(arg)
+            except ValueError as exc:
+                return str(exc)
+            guild_settings.sd_webui_url = url
+            await self.repo.save_settings(guild_settings)
+            ok, detail = await self.webui.health(base_url=url)
+            flag = "已連上" if ok else "已儲存但尚未連上"
+            return f"{flag}：`{url}`\n{detail}"
+
+        if body in ("關閉生圖", "停止生圖"):
+            guild_settings.sd_webui_url = ""
+            await self.repo.save_settings(guild_settings)
+            return "已關閉本伺服器生圖覆寫（改回 .env；若 .env 也空白則不出圖）。"
+
         if any(k in body for k in ("只回老師", "不要回其他人", "鎖定")):
             guild_settings.locked_to_teacher = 1
             await self.repo.save_settings(guild_settings)

@@ -81,6 +81,11 @@ class GuildSetting(Base):
     locked_to_teacher: Mapped[int] = mapped_column(Integer, default=0)  # 0/1
     work_mode: Mapped[int] = mapped_column(Integer, default=0)  # 0=RP, 1=assistant
     extra_layers: Mapped[str] = mapped_column(Text, default="")  # teacher overlay notes
+    # Empty => fall back to .env / config defaults. Teacher-only via （模型…）（深度…）.
+    llm_model: Mapped[str] = mapped_column(String(64), default="")
+    llm_depth: Mapped[str] = mapped_column(String(16), default="")  # off|high|max
+    # Empty => fall back to env SD_WEBUI_URL. Teacher-only via （生圖網址…）.
+    sd_webui_url: Mapped[str] = mapped_column(String(256), default="")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

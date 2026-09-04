@@ -11,6 +11,7 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env        # Windows: copy .env.example .env
 # 填入 DISCORD_TOKEN、DEEPSEEK_API_KEY
+# DEEPSEEK_MODEL 預設 deepseek-v4-flash；要更高品質可改 deepseek-v4-pro
 # 雲端先留空 SD_WEBUI_URL；本機生圖再填 http://127.0.0.1:7860 或 Tailscale URL
 python run.py
 ```
@@ -36,7 +37,15 @@ Discord Developer Portal 請開啟 **Message Content Intent**。
 
 - `/gallery` 本伺服器最近 CG
 
-老師用半形 `(` 或全形 `（` 開頭下設定（鎖定／關閉人設等）。
+老師用半形 `(` 或全形 `（` 開頭下設定（僅 `TEACHER_USER_ID`）：
+
+- `（模型）` 查看目前模型／深度
+- `（模型 flash）` / `（模型 pro）` 切換模型
+- `（深度 關）` / `（深度 high）` / `（深度 max）` 切換思考深度
+- `（生圖狀態）` 測試 WebUI 是否連得上
+- `（生圖網址 http://100.x.y.z:7860）` 設定生圖 API（Tailscale）
+- `（關閉生圖）` 關閉本伺服器生圖覆寫
+- 鎖定／關閉人設等其餘設定同前
 
 ## CG 兩階段
 

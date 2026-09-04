@@ -9,6 +9,17 @@ Goal: keep YuukaBot online 24/7 on the Grok cloud VM. Chat first; CG later via T
 - Optional: `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, `TEACHER_USER_ID`
 - Discord app: **Message Content Intent** enabled
 
+### Model choice (`DEEPSEEK_MODEL`)
+
+| Model | Recommendation | Use |
+|-------|----------------|-----|
+| `deepseek-chat` | Avoid | Legacy name |
+| `deepseek-reasoner` | Avoid | Legacy name |
+| `deepseek-v4-flash` | Primary | Default / daily chat |
+| `deepseek-v4-pro` | Secondary | Complex plot / heavier reasoning |
+
+Default in `.env.example` is `deepseek-v4-flash`. To switch later: edit `.env` and restart the bot.
+
 ## Steps for Grok
 
 ```bash
@@ -39,9 +50,17 @@ Verify logs show `Logged in as ...` and command sync.
 
 ## Later: enable CG
 
-1. On the home PC, start A1111/Forge with API (`--api`), ideally reachable via Tailscale.
-2. In cloud `.env` set e.g. `SD_WEBUI_URL=http://100.x.y.z:7860` (and checkpoint name if needed).
-3. Restart the bot process (kill old `python run.py`, start again in tmux/nohup).
+1. On the home PC:
+   - Install/login **Tailscale**; note your machine IPv4 (`tailscale ip -4`).
+   - Start A1111 / Forge with **API + listen**, e.g. `--api --listen` (port `7860`).
+   - Load checkpoint matching `SD_WEBUI_CHECKPOINT` (default `kivotos-xl-2.0.safetensors`).
+2. After Grok has pulled latest code and restarted the bot, in Discord as teacher:
+   - `@bot （生圖網址 http://YOUR_TAILSCALE_IP:7860）`
+   - `@bot （生圖狀態）` → should show OK
+3. Alternate: set `SD_WEBUI_URL` in cloud `.env` and restart (no Discord command needed).
+4. To disable: `@bot （關閉生圖）` or clear env URL.
+
+Grok cloud must reach the home WebUI over Tailscale (or another reachable URL). Cursor itself never receives Discord image jobs.
 
 ## Update code
 
@@ -50,7 +69,17 @@ cd /workspace/YuukaBot
 git pull
 source .venv/bin/activate
 pip install -r requirements.txt
-# restart bot process
+# restart bot process (keep existing .env secrets)
+```
+
+### Pull prompt（更新時貼給 Grok）
+
+```text
+YuukaBot 有新 commit。請到 /workspace/YuukaBot：
+1. git pull
+2. source .venv/bin/activate && pip install -r requirements.txt
+3. 重啟 tmux/nohup 裡的 python run.py（保留現有 .env，不要覆寫密鑰）
+4. 確認 log 有 Logged in，回報結果
 ```
 
 ---

@@ -20,6 +20,7 @@ class Repository:
     async def init(self) -> None:
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            await conn.run_sync(_ensure_guild_settings_llm_columns)
 
     @asynccontextmanager
     async def session(self) -> AsyncIterator[AsyncSession]:
@@ -250,3 +251,27 @@ class Repository:
 def today_event_key(prefix: str, when: date | None = None) -> str:
     d = when or date.today()
     return f"{prefix}:{d.year}"
+
+
+def _ensure_guild_settings_llm_columns(sync_conn) -> None:
+    """SQLite create_all does not add columns; patch existing DBs."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(sync_conn)
+    if "guild_settings" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("guild_settings")}
+    if "llm_model" not in cols:
+        sync_conn.execute(
+            text("ALTER TABLE guild_settings ADD COLUMN llm_model VARCHAR(64) DEFAULT ''")
+        )
+    if "llm_depth" not in cols:
+        sync_conn.execute(
+            text("ALTER TABLE guild_settings ADD COLUMN llm_depth VARCHAR(16) DEFAULT ''")
+        )
+    if "sd_webui_url" not in cols:
+        sync_conn.execute(
+            text(
+                "ALTER TABLE guild_settings ADD COLUMN sd_webui_url VARCHAR(256) DEFAULT ''"
+            )
+        )
