@@ -11,20 +11,6 @@ class StatusCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
-    @app_commands.command(name="affection", description="查看本伺服器共用好感度")
-    async def affection(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None:
-            await interaction.response.send_message("請在伺服器內使用。", ephemeral=True)
-            return
-        bond = await self.bot.repo.get_or_create_bond(  # type: ignore[attr-defined]
-            interaction.guild.id,
-            self.bot.settings.default_character_id,  # type: ignore[attr-defined]
-        )
-        await interaction.response.send_message(
-            f"本伺服器與優香的共用好感：**{bond.affection}/100**\n目前情緒：`{bond.emotion}`",
-            ephemeral=False,
-        )
-
     @app_commands.command(name="gallery", description="查看本伺服器最近的 CG")
     async def gallery(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:

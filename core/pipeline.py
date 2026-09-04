@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from config import get_settings
-from core.prompt_builder import build_flux_prompt
-from core.schemas import LlmChatResult, build_runtime_system
-from core.scoring import AffectionScorer, crossed_milestones, load_character, load_system_prompt
-from clients.flux import FluxClient
+from core.prompt_builder import build_image_prompt
+from core.schemas import build_runtime_system
+from core.character import load_character, load_system_prompt
+from clients.webui import WebuiClient
 from clients.llm import LlmClient
 from db.repository import Repository
 
@@ -16,14 +16,13 @@ class ChatPipeline:
         self,
         repo: Repository,
         llm: LlmClient,
-        flux: FluxClient,
+        webui: WebuiClient,
         character_id: str = "yuuka",
     ) -> None:
         self.repo = repo
         self.llm = llm
-        self.flux = flux
+        self.webui = webui
         self.character_id = character_id
-        self.scorer = AffectionScorer(repo, character_id)
         self.character = load_character(character_id)
         self.base_prompt = load_system_prompt(character_id)
 
@@ -39,30 +38,18 @@ class ChatPipeline:
         settings = get_settings()
         guild_settings = await self.repo.get_or_create_settings(guild_id)
 
-        # Teacher paren-commands
         command_reply = await self._maybe_handle_command(
             guild_id, user_id, text, guild_settings, is_teacher
         )
         if command_reply is not None:
-            return {
-                "reply": command_reply,
-                "affection": (await self.repo.get_or_create_bond(guild_id, self.character_id)).affection,
-                "affection_delta": 0,
-                "emotion": "neutral",
-                "image_path": None,
-                "score_parts": [],
-            }
+            return {"reply": command_reply, "emotion": "neutral", "image_path": None}
 
-        bond = await self.repo.get_or_create_bond(guild_id, self.character_id)
         work_mode = bool(guild_settings.work_mode)
         if guild_settings.locked_to_teacher and not is_teacher:
             return {
                 "reply": "……現在設定成只回應老師。有正事的話請老師本人來說。",
-                "affection": bond.affection,
-                "affection_delta": 0,
-                "emotion": bond.emotion,
+                "emotion": "neutral",
                 "image_path": None,
-                "score_parts": [],
             }
 
         history = await self.repo.recent_messages(
@@ -81,9 +68,6 @@ class ChatPipeline:
 
         system = build_runtime_system(
             self.base_prompt,
-            affection=bond.affection,
-            emotion=bond.emotion,
-            milestones=self.character.get("affection_milestones", {}),
             extra_layers=guild_settings.extra_layers or "",
             work_mode=work_mode,
             is_teacher=is_teacher,
@@ -91,47 +75,6 @@ class ChatPipeline:
 
         raw = await self.llm.chat(system=system, messages=messages)
         result = self.llm.parse_result(raw)
-
-        if work_mode:
-            # No scoring / CG in work mode
-            await self.repo.add_message(
-                guild_id=guild_id,
-                role="user",
-                content=text,
-                user_id=user_id,
-                display_name=display_name,
-                character_id=self.character_id,
-            )
-            await self.repo.add_message(
-                guild_id=guild_id,
-                role="assistant",
-                content=result.reply,
-                character_id=self.character_id,
-            )
-            return {
-                "reply": result.reply,
-                "affection": bond.affection,
-                "affection_delta": 0,
-                "emotion": "neutral",
-                "image_path": None,
-                "score_parts": [],
-            }
-
-        breakdown = await self.scorer.compute(
-            guild_id=guild_id,
-            user_id=user_id,
-            user_text=text,
-            llm_delta=result.affection_change,
-            score_tags=result.score_tags,
-        )
-        old_aff = bond.affection
-        new_aff = await self.scorer.apply(
-            guild_id=guild_id,
-            user_id=user_id,
-            current_affection=old_aff,
-            breakdown=breakdown,
-            emotion=result.emotion,
-        )
 
         await self.repo.add_message(
             guild_id=guild_id,
@@ -148,18 +91,22 @@ class ChatPipeline:
             character_id=self.character_id,
         )
 
+        if work_mode:
+            return {
+                "reply": result.reply,
+                "emotion": "neutral",
+                "image_path": None,
+            }
+
         image_path = None
-        milestones = self.character.get("affection_milestones", {})
-        crossed = crossed_milestones(old_aff, new_aff, milestones)
         allow_cg, tier = await self._cg_policy(
             guild_id=guild_id,
             trigger=result.trigger_cg,
             requested_tier=result.cg_tier,
-            crossed=crossed,
         )
         if allow_cg and result.cg_scene is not None:
-            prompt = build_flux_prompt(result.cg_scene.model_dump(), self.character_id)
-            image_path = await self.flux.generate(
+            prompt = build_image_prompt(result.cg_scene.model_dump(), self.character_id)
+            image_path = await self.webui.generate(
                 prompt=prompt,
                 tier=tier,
                 guild_id=guild_id,
@@ -177,11 +124,8 @@ class ChatPipeline:
 
         return {
             "reply": result.reply,
-            "affection": new_aff,
-            "affection_delta": breakdown.total,
             "emotion": result.emotion,
             "image_path": image_path,
-            "score_parts": breakdown.parts,
         }
 
     async def _cg_policy(
@@ -190,29 +134,25 @@ class ChatPipeline:
         guild_id: int,
         trigger: bool,
         requested_tier: str,
-        crossed: list[int],
     ) -> tuple[bool, str]:
         settings = get_settings()
-        if not trigger and not crossed:
+        if not trigger:
             return False, "none"
 
         last = await self.repo.last_gallery_at(guild_id, self.character_id)
         now = datetime.now(timezone.utc)
         if last is not None:
-            # normalize naive
             if last.tzinfo is None:
                 last = last.replace(tzinfo=timezone.utc)
-            if (now - last).total_seconds() < settings.cg_cooldown_seconds and not crossed:
+            if (now - last).total_seconds() < settings.cg_cooldown_seconds:
                 return False, "none"
 
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         today_items = await self.repo.gallery_since(guild_id, day_start, self.character_id)
-        if len(today_items) >= settings.cg_daily_limit and not crossed:
+        if len(today_items) >= settings.cg_daily_limit:
             return False, "none"
 
-        tier = "special" if crossed or requested_tier == "special" else "normal"
-        if crossed and max(crossed) >= 50:
-            tier = "special"
+        tier = "special" if requested_tier == "special" else "normal"
         return True, tier
 
     async def _maybe_handle_command(
@@ -244,7 +184,6 @@ class ChatPipeline:
             await self.repo.save_settings(guild_settings)
             return "已恢復優香人設。"
 
-        # Generic overlay note from teacher
         guild_settings.extra_layers = (
             (guild_settings.extra_layers or "") + f"\n- {body}"
         ).strip()

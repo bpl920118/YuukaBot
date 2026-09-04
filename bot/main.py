@@ -8,7 +8,7 @@ from discord.ext import commands
 
 from config import get_settings
 from core.pipeline import ChatPipeline
-from clients.flux import FluxClient
+from clients.webui import WebuiClient
 from clients.llm import LlmClient
 from db.repository import Repository
 
@@ -24,7 +24,7 @@ class YuukaBot(commands.Bot):
         self.pipeline = ChatPipeline(
             self.repo,
             LlmClient(),
-            FluxClient(),
+            WebuiClient(),
             character_id=self.settings.default_character_id,
         )
         self._user_cooldown: dict[int, float] = {}
@@ -98,14 +98,7 @@ async def handle_message(bot: YuukaBot, message: discord.Message) -> None:
         if path.exists() and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
             files.append(discord.File(path))
 
-    delta = result.get("affection_delta", 0)
-    aff = result.get("affection", 0)
-    footer = (
-        f"\n\n（伺服器好感 {aff}/100，本輪 {delta:+d}）"
-        if delta
-        else f"\n\n（伺服器好感 {aff}/100）"
-    )
-    await message.reply(result["reply"] + footer, files=files, mention_author=False)
+    await message.reply(result["reply"], files=files, mention_author=False)
     await bot.process_commands(message)
 
 

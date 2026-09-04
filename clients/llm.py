@@ -23,13 +23,10 @@ class LlmClient:
             return json.dumps(
                 {
                     "reply": "老師……API 金鑰還沒設定，但我先在這裡應答。請把帳目補上。",
-                    "affection_change": 1,
                     "emotion": "neutral",
                     "trigger_cg": False,
                     "cg_tier": "none",
                     "cg_scene": None,
-                    "score_tags": ["chat"],
-                    "score_reason": "stub",
                 },
                 ensure_ascii=False,
             )
@@ -57,7 +54,7 @@ class LlmClient:
         except Exception:
             # One soft fallback: treat whole text as reply
             text = raw.strip() or "……稍微算錯一步。再說一次好嗎？"
-            return LlmChatResult(reply=text[:500], affection_change=0, emotion="neutral")
+            return LlmChatResult(reply=text[:500], emotion="neutral")
 
     @staticmethod
     def _extract_json(raw: str) -> dict[str, Any]:

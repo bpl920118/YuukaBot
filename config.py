@@ -19,10 +19,19 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
 
-    flux_api_key: str = ""
-    flux_base_url: str = ""
-    flux_model_normal: str = "flux-2-klein-9b"
-    flux_model_special: str = "flux-2-pro"
+    # Stable Diffusion WebUI (A1111 / Forge). Empty URL => skip image generation.
+    sd_webui_url: str = ""
+    sd_webui_checkpoint: str = "kivotos-xl-2.0.safetensors"
+    sd_webui_sampler: str = "Euler a"
+    sd_webui_steps: int = 28
+    sd_webui_cfg: float = 7.0
+    sd_webui_width: int = 832
+    sd_webui_height: int = 1216
+    sd_webui_timeout: int = 300
+    sd_webui_negative_prompt: str = (
+        "(low quality, worst quality:1.2), very displeasing, 3d, "
+        "watermark, signature, ugly, poorly drawn"
+    )
 
     database_url: str = "sqlite+aiosqlite:///./yuuka.db"
     image_dir: Path = ROOT / "storage" / "images"
