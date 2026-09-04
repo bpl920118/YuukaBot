@@ -285,6 +285,19 @@ class ChatPipeline:
                 "image_path": str(image_path),
             }
 
+        if any(k in body for k in ("清除對話", "刪除對話", "清除記憶", "刪除記憶")):
+            n = await self.repo.clear_messages(guild_id, self.character_id)
+            return f"已清除本伺服器對話記憶（{n} 則）。之後會當新對話開始。"
+
+        if any(k in body for k in ("清除圖庫", "刪除圖庫", "清除CG", "清除 cg")):
+            n = await self.repo.clear_gallery(guild_id, self.character_id)
+            return f"已清除本伺服器圖庫紀錄（{n} 筆）。磁碟上的舊圖檔未刪。"
+
+        if any(k in body for k in ("清除叠加", "清除疊加", "清除額外設定", "清除老師設定")):
+            guild_settings.extra_layers = ""
+            await self.repo.save_settings(guild_settings)
+            return "已清除老師叠加設定。"
+
         if any(k in body for k in ("只回老師", "不要回其他人", "鎖定")):
             guild_settings.locked_to_teacher = 1
             await self.repo.save_settings(guild_settings)

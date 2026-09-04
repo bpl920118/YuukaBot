@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from config import get_settings
@@ -128,6 +128,32 @@ class Repository:
             )
             rows = list(await session.scalars(stmt))
             return list(reversed(rows))
+
+    async def clear_messages(
+        self, guild_id: int, character_id: str = "yuuka"
+    ) -> int:
+        async with self.session() as session:
+            result = await session.execute(
+                delete(Message).where(
+                    Message.guild_id == guild_id,
+                    Message.character_id == character_id,
+                )
+            )
+            await session.commit()
+            return int(result.rowcount or 0)
+
+    async def clear_gallery(
+        self, guild_id: int, character_id: str = "yuuka"
+    ) -> int:
+        async with self.session() as session:
+            result = await session.execute(
+                delete(GalleryItem).where(
+                    GalleryItem.guild_id == guild_id,
+                    GalleryItem.character_id == character_id,
+                )
+            )
+            await session.commit()
+            return int(result.rowcount or 0)
 
     async def add_score_event(
         self,
