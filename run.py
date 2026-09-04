@@ -24,14 +24,14 @@ def run() -> None:
     async def on_ready() -> None:
         print(f"Logged in as {bot.user} ({bot.user and bot.user.id})")
         try:
-            # Global sync (may take up to ~1h to show everywhere).
+            # Guild + global double-sync makes every slash appear twice in the menu.
+            # Clear per-guild command sets, then keep a single global sync.
+            for guild in bot.guilds:
+                bot.tree.clear_commands(guild=guild)
+                cleared = await bot.tree.sync(guild=guild)
+                print(f"Cleared guild commands → {guild.id} (now {len(cleared)})")
             synced = await bot.tree.sync()
             print(f"Synced {len(synced)} global app commands")
-            # Also push to joined guilds so `/` menu updates immediately.
-            for guild in bot.guilds:
-                bot.tree.copy_global_to(guild=guild)
-                guild_synced = await bot.tree.sync(guild=guild)
-                print(f"Synced {len(guild_synced)} commands → guild {guild.id}")
         except Exception as exc:
             print(f"Command sync failed: {exc}")
 

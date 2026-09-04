@@ -186,13 +186,13 @@ class SlashCog(commands.Cog):
         text = await self.pipeline.disable_image(gid)
         await interaction.response.send_message(text, ephemeral=True)
 
-    @image.command(name="test", description="強制出一張測試 CG（固定場景）")
+    @image.command(name="test", description="強制出一張測試 CG（固定場景；頻道公開）")
     @owner_only()
     async def image_test(self, interaction: discord.Interaction) -> None:
         gid = await _require_guild(interaction)
         if gid is None:
             return
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer(ephemeral=False)
         result = await self.pipeline.test_image(gid, interaction.user.id)
         files = []
         image_path = result.get("image_path")
@@ -206,13 +206,11 @@ class SlashCog(commands.Cog):
                 ".gif",
             }:
                 files.append(discord.File(path, filename=path.name))
-        await interaction.followup.send(
-            result["reply"], files=files, ephemeral=True
-        )
+        await interaction.followup.send(result["reply"], files=files)
 
     @image.command(
         name="force",
-        description="依近期對話記憶強制生圖（僅管理者；不消耗好感門檻）",
+        description="依近期對話記憶強制生圖（僅管理者；頻道公開）",
     )
     @owner_only()
     async def image_force(self, interaction: discord.Interaction) -> None:
