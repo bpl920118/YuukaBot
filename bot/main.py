@@ -75,6 +75,23 @@ async def maybe_clear_channel_messages(
 ) -> bool:
     """Teacher-only: delete messages already posted in this channel. Returns True if handled."""
     body = parse_paren_command(text)
+    # Fallback: keyword in raw text (avoid missing half-width / odd spacing cases)
+    if body is None:
+        raw = (text or "").strip()
+        for prefix in (
+            "清除機器人訊息",
+            "刪除機器人訊息",
+            "消除機器人訊息",
+            "清除頻道",
+            "刪除頻道",
+            "消除頻道",
+        ):
+            if prefix in raw:
+                # e.g. "清除頻道 從此" or "(清除頻道 從此)"
+                idx = raw.find(prefix)
+                body = (prefix + raw[idx + len(prefix) :]).strip()
+                body = body.rstrip(")）").strip()
+                break
     if body is None:
         return False
 
@@ -108,8 +125,8 @@ async def maybe_clear_channel_messages(
         await message.reply("清除頻道訊息只有老師可以使用。", mention_author=False)
         return True
 
-    if not isinstance(message.channel, discord.TextChannel):
-        await message.reply("只能在文字頻道清除訊息。", mention_author=False)
+    if not isinstance(message.channel, (discord.TextChannel, discord.Thread)):
+        await message.reply("只能在文字頻道／討論串清除訊息。", mention_author=False)
         return True
 
     tz8 = timezone(timedelta(hours=8))
@@ -134,6 +151,13 @@ async def maybe_clear_channel_messages(
         rest in ("", "從此", "之後", "這則", "開始")
     ):
         after_id = int(message.reference.message_id)
+    elif rest in ("從此", "之後", "這則", "開始"):
+        await message.reply(
+            "要用「從此」請先**回覆劇情第一則訊息**，再 `@我 （清除頻道 從此）`。\n"
+            "或直接打：`（清除頻道 從10:55）`",
+            mention_author=False,
+        )
+        return True
     elif rest:
         m = re.fullmatch(r"\d+", rest.strip())
         if m:
@@ -238,6 +262,28 @@ async def handle_message(bot: YuukaBot, message: discord.Message) -> None:
 
     if is_teacher and paren in ("狀態", "ping", "在嗎"):
         await message.reply("在。老師指令可用。", mention_author=False)
+        return
+
+    # Never let clear-channel keywords fall through to the LLM soft-fallback.
+    clear_hint = bool(
+        re.search(
+            r"清除頻道|刪除頻道|消除頻道|清除機器人訊息|刪除機器人訊息|消除機器人訊息",
+            text or "",
+        )
+    )
+    if clear_hint:
+        try:
+            handled = await maybe_clear_channel_messages(bot, message, text, is_teacher)
+        except Exception as exc:
+            await message.reply(f"清除指令出錯：`{type(exc).__name__}: {exc}`", mention_author=False)
+            return
+        if handled:
+            await bot.process_commands(message)
+            return
+        await message.reply(
+            "無法辨識清除指令。請用：`（清除頻道 從10:55）` 或回覆第一則後 `（清除頻道 從此）`",
+            mention_author=False,
+        )
         return
 
     if await maybe_clear_channel_messages(bot, message, text, is_teacher):

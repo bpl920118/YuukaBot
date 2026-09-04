@@ -177,6 +177,23 @@ class ChatPipeline:
         body = stripped.lstrip("(（").rstrip(")）").strip()
         settings = get_settings()
 
+        # Channel purge is handled in bot/main.py (needs Discord channel API).
+        if any(
+            body.startswith(p)
+            for p in (
+                "清除頻道",
+                "刪除頻道",
+                "消除頻道",
+                "清除機器人訊息",
+                "刪除機器人訊息",
+                "消除機器人訊息",
+            )
+        ):
+            return (
+                "頻道訊息清除請用：`（清除頻道 從10:55）`，"
+                "或回覆劇情第一則後再 `（清除頻道 從此）`。"
+            )
+
         if body in ("模型", "查看模型", "模型設定", "深度", "查看深度"):
             model = resolve_model(guild_settings.llm_model, settings.deepseek_model)
             depth = resolve_depth(guild_settings.llm_depth, settings.deepseek_depth)
