@@ -93,11 +93,10 @@ async def handle_message(bot: YuukaBot, message: discord.Message) -> None:
             await message.reply(f"……計算出錯了：`{exc}`", mention_author=False)
             return
 
-    # Reply text immediately; CG keywords come from the LLM, SD runs after.
-    await message.reply(result["reply"], mention_author=False)
-
+    # CG turn: image only when SD succeeds; otherwise keep the text reply.
     pending_cg = result.get("pending_cg")
     if pending_cg:
+        image_path = None
         try:
             async with message.channel.typing():
                 image_path = await bot.pipeline.fulfill_cg(
@@ -119,6 +118,12 @@ async def handle_message(bot: YuukaBot, message: discord.Message) -> None:
                     file=discord.File(path),
                     mention_author=False,
                 )
+            else:
+                await message.reply(result["reply"], mention_author=False)
+        else:
+            await message.reply(result["reply"], mention_author=False)
+    else:
+        await message.reply(result["reply"], mention_author=False)
 
     await bot.process_commands(message)
 

@@ -15,7 +15,10 @@ from core.character import (
     load_system_prompt,
     match_lorebook,
     match_storyline,
+    resolve_storyline_phase,
 )
+from core.home_llm import is_home_inference_url
+from core.world import sticky_moment
 from core.immersion import apply_immersion_marker
 from core.llm_options import parse_depth_arg, parse_model_arg, resolve_depth
 from core.providers import (
@@ -37,6 +40,7 @@ from core.providers import (
 from core.scoring import AffectionScorer
 from clients.webui import WebuiClient, normalize_webui_url
 from clients.llm import LlmClient, is_near_duplicate
+from clients.vram_switch import prepare_for_sd, restore_after_sd
 from db.repository import Repository
 
 
@@ -121,6 +125,72 @@ class ChatPipeline:
         self.base_prompt = load_system_prompt(character_id)
         self.scorer = AffectionScorer(repo, character_id=character_id)
 
+    def _base_prompt_for(self, *, home_mode: bool) -> str:
+        if home_mode:
+            return load_system_prompt(self.character_id, home_mode=True)
+        return self.base_prompt
+
+    async def _maybe_compact_memory(
+        self,
+        *,
+        guild_id: int,
+        base_url: str,
+        api_key: str,
+        model: str,
+    ) -> None:
+        """Drop oldest turns into a rolling summary when over MEMORY_LIMIT."""
+        settings = get_settings()
+        keep = max(4, int(settings.memory_limit))
+        total = await self.repo.count_messages(guild_id, self.character_id)
+        overflow = total - keep
+        if overflow <= 0:
+            return
+        old = await self.repo.oldest_messages(
+            guild_id, overflow, character_id=self.character_id
+        )
+        if not old:
+            return
+        prev = await self.repo.get_memory_summary(guild_id, self.character_id)
+        lines = []
+        for m in old:
+            role = "老師" if m.role == "user" else "優香"
+            lines.append(f"{role}：{(m.content or '')[:120]}")
+        blob = "\n".join(lines)[:2500]
+        system = (
+            "用繁體中文把對話壓成 80～150 字劇情摘要，保留人名、約定、未了之事。"
+            "只輸出摘要正文，不要 JSON、不要標題。"
+        )
+        user_content = (
+            f"既有摘要：\n{prev or '（無）'}\n\n新增要壓縮的對話：\n{blob}"
+        )
+        try:
+            raw = await self.llm.chat(
+                system=system,
+                messages=[{"role": "user", "content": user_content}],
+                depth="off",
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
+            )
+            # Summarizer may return JSON reply field or plain text.
+            parsed = self.llm.parse_result(raw)
+            summary = (parsed.reply or "").strip()
+            if summary.startswith("{") or len(summary) < 8:
+                summary = (raw or "").strip()[: settings.memory_summary_max_chars]
+            else:
+                summary = summary[: settings.memory_summary_max_chars]
+            if prev and summary and prev not in summary:
+                merged = f"{prev}\n{summary}"[: settings.memory_summary_max_chars]
+            else:
+                merged = summary or prev
+            if merged:
+                await self.repo.set_memory_summary(
+                    guild_id, merged, character_id=self.character_id
+                )
+            await self.repo.delete_messages_by_ids([int(m.id) for m in old])
+        except Exception:
+            return
+
     async def handle(
         self,
         *,
@@ -142,6 +212,16 @@ class ChatPipeline:
                 "image_path": None,
                 "pending_cg": None,
             }
+
+        base_url, api_key, model = _resolve_guild_endpoint(guild_settings, settings)
+        home_mode = is_home_inference_url(base_url)
+
+        await self._maybe_compact_memory(
+            guild_id=guild_id,
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+        )
 
         # Heal leftovers from older soft-fallback turns that saved user without reply.
         await self.repo.drop_trailing_orphan_user_messages(
@@ -180,34 +260,54 @@ class ChatPipeline:
             }
         )
 
-        lore = match_lorebook(
-            text or "",
-            self.character,
-            character_id=self.character_id,
-            limit=2,
-        )
-        recent_for_story = [
+        recent_for_scan = [
             m.content
             for m in history
             if m.role in {"user", "assistant"} and (m.content or "").strip()
-        ][-8:]
+        ][-max(1, settings.lore_scan_depth) :]
+        scan_blob = "\n".join([*(recent_for_scan or []), text or ""])
+        lore = match_lorebook(
+            scan_blob,
+            self.character,
+            character_id=self.character_id,
+            limit=2,
+            max_chars=settings.lore_max_chars if home_mode else None,
+        )
         story = match_storyline(
             text or "",
-            recent_for_story,
+            recent_for_scan,
             self.character,
             character_id=self.character_id,
         )
-        lore_blocks = "\n\n".join(p for p in (story, lore) if p.strip())
+        phase = resolve_storyline_phase(
+            text or "",
+            recent_for_scan,
+            self.character,
+            character_id=self.character_id,
+        )
+        phase_id = str((phase or {}).get("id") or "").strip() or None
+        scene = sticky_moment(
+            character_id=self.character_id,
+            storyline_phase=phase_id,
+        )
+        scene_block = scene.prompt_block()
+        lore_blocks = "\n\n".join(
+            p for p in (story, lore, scene_block) if p and p.strip()
+        )
+        memory_summary = await self.repo.get_memory_summary(
+            guild_id, self.character_id
+        )
         system = build_runtime_system(
-            self.base_prompt,
+            self._base_prompt_for(home_mode=home_mode),
             extra_layers=guild_settings.extra_layers or "",
             work_mode=work_mode,
             lore=lore_blocks,
+            memory_summary=memory_summary,
+            home_mode=home_mode,
         )
 
         depth = resolve_depth(guild_settings.llm_depth, settings.deepseek_depth)
         # Official V4 immersion marker: only when toggled on + thinking enabled.
-        base_url, api_key, model = _resolve_guild_endpoint(guild_settings, settings)
         if bool(guild_settings.llm_immersion) and depth != "off" and supports_thinking(
             base_url
         ):
@@ -376,6 +476,8 @@ class ChatPipeline:
         if not effective_url:
             return None
 
+        base_url, _api_key, model = _resolve_guild_endpoint(guild_settings, settings)
+
         # Score-unlock / force CG must match THIS reply's beat.
         # Chat-turn image_prompt is often null (trigger_cg=false) or generic office.
         image_prompt = await self._infer_image_prompt(
@@ -409,6 +511,8 @@ class ChatPipeline:
             "emotion": result.emotion,
             "triggered_by_user_id": user_id,
             "base_url": guild_settings.sd_webui_url or None,
+            "llm_base_url": base_url,
+            "llm_model": model,
         }
 
     async def _infer_image_prompt(
@@ -419,6 +523,8 @@ class ChatPipeline:
         guild_settings=None,
     ) -> str | None:
         """Ask LLM for English SD tags from the latest assistant beat."""
+        # Seed with heuristic props so weak local models still get plot tags.
+        heuristic = heuristic_image_tags(reply, None)
         snippet = []
         for m in messages[-4:]:
             role = m.get("role")
@@ -426,6 +532,8 @@ class ChatPipeline:
             if role and content:
                 snippet.append(f"{role}: {content[:180]}")
         snippet.append(f"assistant_latest: {reply[:400]}")
+        if heuristic:
+            snippet.append(f"hint_tags: {heuristic}")
         system = (
             "只輸出合法 JSON（不要 markdown）："
             '{"reply":".","emotion":"neutral","trigger_cg":true,"cg_tier":"normal",'
@@ -459,8 +567,8 @@ class ChatPipeline:
             if parsed.image_prompt:
                 return parsed.image_prompt
         except Exception:
-            return None
-        return None
+            pass
+        return heuristic
 
     async def fulfill_cg(
         self,
@@ -472,12 +580,29 @@ class ChatPipeline:
         prompt = pending_cg.get("prompt") or ""
         if not prompt.strip():
             return None
-        image_path = await self.webui.generate(
-            prompt=prompt,
-            tier=str(pending_cg.get("tier") or "normal"),
-            guild_id=guild_id,
-            base_url=pending_cg.get("base_url"),
+        llm_base = (pending_cg.get("llm_base_url") or "").strip()
+        if not llm_base:
+            guild_settings = await self.repo.get_or_create_settings(guild_id)
+            llm_base, _, model = _resolve_guild_endpoint(
+                guild_settings, get_settings()
+            )
+        else:
+            model = (pending_cg.get("llm_model") or "").strip() or None
+        await prepare_for_sd(
+            llm_base,
+            model,
+            sd_base_url=pending_cg.get("base_url"),
         )
+        image_path = None
+        try:
+            image_path = await self.webui.generate(
+                prompt=prompt,
+                tier=str(pending_cg.get("tier") or "normal"),
+                guild_id=guild_id,
+                base_url=pending_cg.get("base_url"),
+            )
+        finally:
+            await restore_after_sd(llm_base, model)
         if image_path:
             await self.repo.add_gallery(
                 guild_id=guild_id,
@@ -907,7 +1032,15 @@ class ChatPipeline:
             "mood": "calm, soft lighting",
         }
         prompt = build_image_prompt(scene, self.character_id, image_prompt=None)
+        settings = get_settings()
+        base_url, _, model = _resolve_guild_endpoint(guild_settings, settings)
+        image_path = None
         try:
+            await prepare_for_sd(
+                base_url,
+                model,
+                sd_base_url=guild_settings.sd_webui_url or None,
+            )
             image_path = await self.webui.generate(
                 prompt=prompt,
                 tier="normal",
@@ -920,6 +1053,8 @@ class ChatPipeline:
                 "emotion": "neutral",
                 "image_path": None,
             }
+        finally:
+            await restore_after_sd(base_url, model)
         if not image_path:
             _ok, detail = await self.webui.health(
                 base_url=guild_settings.sd_webui_url or None

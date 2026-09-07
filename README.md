@@ -18,7 +18,10 @@ python run.py
 
 Discord Developer Portal 請開啟 **Message Content Intent**。
 
-雲端（Grok Bot）部署步驟見 [`DEPLOY_GROK.md`](DEPLOY_GROK.md)。
+雲端（Grok Bot）部署步驟見 [`DEPLOY_GROK.md`](DEPLOY_GROK.md)。  
+本機 SillyTavern 管卡、Tailscale 連家用 LLM／SD：見 [`docs/local-tavern.md`](docs/local-tavern.md)。
+
+現有雲端 API（DeepSeek／Gemini／OpenAI）與 Discord `/api` **完整保留**；家用模是可選、自行填 URL。
 
 ## 對話流程
 

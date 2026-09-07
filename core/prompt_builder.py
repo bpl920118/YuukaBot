@@ -95,6 +95,14 @@ def heuristic_image_tags(reply: str, emotion: str | None = None) -> str | None:
             ("茶", "倒茶", "熱茶"),
             "holding teacup, office desk, soft indoor light",
         ),
+        (
+            ("臉紅", "耳尖", "結巴", "我才沒有"),
+            "blushing, averted eyes, flustered, holding calculator to chest",
+        ),
+        (
+            ("簽名", "推近", "表單轉"),
+            "pushing paperwork toward viewer, desk, leaning forward",
+        ),
     )
     for keys, tags in rules:
         if any(k in text for k in keys):

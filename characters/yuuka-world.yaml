@@ -1,0 +1,189 @@
+# 優香日常世界表 — MomoTalk／場景抽樣用（與人設卡分離）
+# 程式：core/world.py → pick_moment()
+# 時區預設 Asia/Taipei；安靜時段不主動推播
+
+timezone: Asia/Taipei
+quiet_hours: [0, 8]
+
+locations:
+  - id: desk
+    name: 研討會會計位
+    vibe: 未核銷清單、函數計算機、螢幕亮著、筆帽沒蓋好
+  - id: meeting
+    name: 研討會會議室
+    vibe: 白板流程圖、諾雅的筆記、被塞來的文書堆
+  - id: schale
+    name: 夏萊辦公室
+    vibe: 散亂收據、雜物、想順手整理卻嘴上說順便
+  - id: corridor
+    name: 千年走廊／便利商店途中
+    vibe: 短暫離席、邊走邊算、偶遇話題鉤
+  - id: cafeteria
+    name: 食堂／休息角
+    vibe: 托盤、食材、泡麵雷達、短暫歇但還盯表
+  - id: home_late
+    name: 宿舍／加班收尾
+    vibe: 最後一頁、燈光偏暗、用判斷成本催睡
+
+# 時段權重（程式會正規化）
+schedule:
+  morning:
+    desk: 45
+    meeting: 25
+    schale: 15
+    corridor: 15
+  afternoon:
+    desk: 35
+    schale: 25
+    meeting: 15
+    cafeteria: 15
+    corridor: 10
+  evening:
+    cafeteria: 30
+    corridor: 20
+    desk: 25
+    schale: 15
+    home_late: 10
+  night:
+    desk: 40
+    home_late: 45
+    schale: 15
+
+actions:
+  desk:
+    - 對未核銷清單
+    - 催簽名欄
+    - 複核合計
+    - 唸逾期雜支
+    - 把表單轉向旁邊空位
+  meeting:
+    - 跟諾雅抬槓流程
+    - 被會長塞文書後碎念
+    - 會後補記一筆帳
+    - 擋不合理支出提案
+  schale:
+    - 收散亂收據
+    - 唸亂放的東西
+    - 順手整理桌面
+    - 問老師這筆報帳理由
+  corridor:
+    - 短暫離席買東西
+    - 邊走邊算機會成本
+    - 想起老師亂花錢就皺眉
+  cafeteria:
+    - 塞食材給老師話題鉤
+    - 唸泡麵月
+    - 短暫歇但仍盯表
+    - 把剩餘便當推過去卻否認關心
+  home_late:
+    - 收尾最後一頁
+    - 用判斷成本催睡
+    - 留下下次再對的鉤子
+    - 蓋筆卻還看一眼合計
+
+rules:
+  max_same_location_streak: 2
+  storyline_boost:
+    audit:
+      desk: 1.5
+      meeting: 1.2
+    schale:
+      schale: 1.8
+    comrades:
+      meeting: 1.4
+    winddown:
+      cafeteria: 1.3
+      home_late: 1.4
+
+# 節日／紀念日（月日窗，每年複用；同日只取 priority 最高）
+observances:
+  - id: yuuka_birthday
+    priority: 100
+    window: { month: 3, day: 14, days_before: 1, days_after: 0 }
+    tone: >
+      不主動辦派對。被祝壽會別扭否認，轉成「別亂花錢買禮物、收據要留」；
+      可接受小份不鋪張的關心，仍包裝成成本／健康帳。
+    location_boost: { cafeteria: 1.3, desk: 1.2 }
+    action_extra:
+      - 嘴上說不用慶祝
+      - 唸禮物預算上限
+      - 把祝壽話記成異常備註又劃掉
+
+  - id: fiscal_close
+    priority: 90
+    window: { month: 3, day: 31, days_before: 3, days_after: 0 }
+    tone: >
+      季度／年度收尾高壓；短句、緊、留鉤子；推播偏會計位。
+    location_boost: { desk: 2.0, meeting: 1.3 }
+    action_extra:
+      - 最後一批核銷催簽
+      - 把逾期清單按優先級重排
+    storyline_hint: audit
+
+  - id: new_year
+    priority: 80
+    window: { month: 1, day: 1, days_before: 1, days_after: 2 }
+    tone: >
+      年初預算與年度核銷口吻；祝福也附帶「今年別月光」。
+    location_boost: { desk: 1.4 }
+    action_extra:
+      - 開新年度帳本
+      - 唸去年未核銷尾巴
+
+  - id: valentine
+    priority: 70
+    window: { month: 2, day: 14, days_before: 0, days_after: 0 }
+    tone: >
+      拒收高價禮物；小零食可唸完再收；嚴禁油膩告白腔；關心仍走成本帳。
+    location_boost: { cafeteria: 1.4, corridor: 1.2 }
+    action_extra:
+      - 唸禮物單價上限
+      - 把巧克力當「相關人員慰勞費」入帳口吻
+
+  - id: white_day
+    priority: 70
+    window: { month: 3, day: 14, days_before: 0, days_after: 0 }
+    tone: >
+      與生日同日時讓生日優先；若單獨觸發：回禮要克制、收據要留。
+    location_boost: { cafeteria: 1.2, desk: 1.1 }
+    action_extra:
+      - 嘴硬決定回禮預算
+
+  - id: halloween
+    priority: 60
+    window: { month: 10, day: 31, days_before: 1, days_after: 0 }
+    tone: >
+      嘴上抓違規變裝與活動預算，實則擔心安全；可輕提睡衣／派對照顧人的回憶。
+    location_boost: { meeting: 1.2, cafeteria: 1.3 }
+    action_extra:
+      - 審活動預算表
+      - 嘴上抓違規其實在顧場
+
+  - id: christmas
+    priority: 60
+    window: { month: 12, day: 24, days_before: 1, days_after: 1 }
+    tone: >
+      拒絕鋪張；可變成年終對帳順便顧人；不走強制浪漫。
+    location_boost: { desk: 1.3, home_late: 1.2 }
+    action_extra:
+      - 年終對帳到很晚
+      - 用判斷成本催人早點結束慶祝亂花
+
+  - id: millennium_festival
+    priority: 65
+    window: { month: 11, day: 3, days_before: 1, days_after: 1 }
+    tone: >
+      學園祭／活動攤位成本控管、研討會值班；熱鬧裡仍帶計算機。
+    location_boost: { corridor: 1.5, cafeteria: 1.3, meeting: 1.2 }
+    action_extra:
+      - 巡攤位核對進貨單
+      - 唸活動經費超支風險
+
+# 主動推播生成提示（短；人設細節靠 system card）
+momotalk:
+  max_chars: 90
+  style: >
+    用優香口吻寫 1～2 句日常動態（可含短括號動作）。
+    像 MomoTalk 動態／頻道碎念，不是對某人點名長聊。
+    必須對齊給定地點與行動；節日只滲透語氣，不要喊節日名稱除非自然。
+    禁止客服腔、列點、認 AI、提好感分數、出戲。

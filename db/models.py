@@ -21,6 +21,8 @@ class GuildBond(Base):
     character_id: Mapped[str] = mapped_column(String(64), default="yuuka")
     affection: Mapped[int] = mapped_column(Integer, default=0)
     emotion: Mapped[str] = mapped_column(String(32), default="neutral")
+    # Rolling summary of turns dropped beyond MEMORY_LIMIT (ST / OpenTavern-style).
+    memory_summary: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

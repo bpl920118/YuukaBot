@@ -32,6 +32,7 @@ class Repository:
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
             await conn.run_sync(_ensure_guild_settings_llm_columns)
+            await conn.run_sync(_ensure_guild_bonds_summary_column)
 
     @asynccontextmanager
     async def session(self) -> AsyncIterator[AsyncSession]:
@@ -180,8 +181,77 @@ class Repository:
                     Message.character_id == character_id,
                 )
             )
+            bond = await session.scalar(
+                select(GuildBond).where(
+                    GuildBond.guild_id == guild_id,
+                    GuildBond.character_id == character_id,
+                )
+            )
+            if bond is not None and hasattr(bond, "memory_summary"):
+                bond.memory_summary = ""
             await session.commit()
             return int(result.rowcount or 0)
+
+    async def count_messages(
+        self, guild_id: int, character_id: str = "yuuka"
+    ) -> int:
+        async with self.session() as session:
+            total = await session.scalar(
+                select(func.count())
+                .select_from(Message)
+                .where(
+                    Message.guild_id == guild_id,
+                    Message.character_id == character_id,
+                )
+            )
+            return int(total or 0)
+
+    async def oldest_messages(
+        self, guild_id: int, limit: int, character_id: str = "yuuka"
+    ) -> list[Message]:
+        if limit <= 0:
+            return []
+        async with self.session() as session:
+            stmt: Select[tuple[Message]] = (
+                select(Message)
+                .where(
+                    Message.guild_id == guild_id,
+                    Message.character_id == character_id,
+                )
+                .order_by(Message.id.asc())
+                .limit(limit)
+            )
+            return list(await session.scalars(stmt))
+
+    async def delete_messages_by_ids(self, ids: list[int]) -> int:
+        if not ids:
+            return 0
+        async with self.session() as session:
+            result = await session.execute(delete(Message).where(Message.id.in_(ids)))
+            await session.commit()
+            return int(result.rowcount or 0)
+
+    async def get_memory_summary(
+        self, guild_id: int, character_id: str = "yuuka"
+    ) -> str:
+        bond = await self.get_or_create_bond(guild_id, character_id)
+        return (getattr(bond, "memory_summary", None) or "").strip()
+
+    async def set_memory_summary(
+        self, guild_id: int, summary: str, character_id: str = "yuuka"
+    ) -> None:
+        async with self.session() as session:
+            bond = await session.scalar(
+                select(GuildBond).where(
+                    GuildBond.guild_id == guild_id,
+                    GuildBond.character_id == character_id,
+                )
+            )
+            if bond is None:
+                bond = GuildBond(guild_id=guild_id, character_id=character_id)
+                session.add(bond)
+            bond.memory_summary = (summary or "").strip()
+            await session.commit()
 
     async def clear_gallery(
         self, guild_id: int, character_id: str = "yuuka"
@@ -363,4 +433,17 @@ def _ensure_guild_settings_llm_columns(sync_conn) -> None:
     if "llm_api_key" not in cols:
         sync_conn.execute(
             text("ALTER TABLE guild_settings ADD COLUMN llm_api_key TEXT DEFAULT ''")
+        )
+
+
+def _ensure_guild_bonds_summary_column(sync_conn) -> None:
+    from sqlalchemy import inspect, text
+
+    insp = inspect(sync_conn)
+    if "guild_bonds" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("guild_bonds")}
+    if "memory_summary" not in cols:
+        sync_conn.execute(
+            text("ALTER TABLE guild_bonds ADD COLUMN memory_summary TEXT DEFAULT ''")
         )

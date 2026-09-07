@@ -169,12 +169,25 @@ def scrub_score_leak(text: str) -> str:
     return cleaned.strip() or (text or "").strip()
 
 
+JSON_SCHEMA_HINT_HOME = """
+你必須只輸出一個合法 json 物件（不要 markdown、不要 think 標籤、不要思考過程）。
+格式：{"reply":"繁中對白","emotion":"neutral|happy|shy|sad|angry|flustered|tired|proud","trigger_cg":false,"cg_tier":"none","cg_scene":null,"image_prompt":null}
+reply 不可空、勿提好感／分數、勿列點。畫面強時可填英文 image_prompt 短標籤。
+""".strip()
+
+OUTPUT_GUARDRAILS_HOME = """
+【輸出強制】只輸出 JSON；禁止 think／思考過程；reply 繁中至少兩字；禁止重複上一則；禁止分數劇透；偏短 1～4 句。
+""".strip()
+
+
 def build_runtime_system(
     base_prompt: str,
     *,
     extra_layers: str = "",
     work_mode: bool = False,
     lore: str = "",
+    memory_summary: str = "",
+    home_mode: bool = False,
 ) -> str:
     if work_mode:
         return (
@@ -186,21 +199,41 @@ def build_runtime_system(
             "\nreply 不可為空。不要出圖（trigger_cg 必須 false）。"
         )
 
-    # Stable card prefix (cache) → optional lore → server rules → tail guards.
+    # Stable card → lore/story → summary → rules → /note → JSON guards (tail).
     parts = [base_prompt.strip()]
     if lore.strip():
         parts.extend(["", lore.strip()])
+    if memory_summary.strip():
+        parts.extend(
+            [
+                "",
+                "【先前摘要——遠輪壓縮，可接續；勿向老師宣讀本標籤】",
+                memory_summary.strip()[: get_settings_summary_cap()],
+            ]
+        )
     parts.extend(["", SERVER_RULES])
-    if extra_layers.strip():
-        parts.extend(["", "【老師叠加設定】", extra_layers.strip()])
+    note = (extra_layers or "").strip()
+    if note:
+        if home_mode and len(note) > 500:
+            note = note[:500] + "…"
+        parts.extend(["", "【老師叠加設定】", note])
     parts.extend(
         [
             "",
             "這位發言者是老師。請稱對方「老師」，用對老師的口吻回應。",
             "",
-            JSON_SCHEMA_HINT,
+            JSON_SCHEMA_HINT_HOME if home_mode else JSON_SCHEMA_HINT,
             "",
-            OUTPUT_GUARDRAILS,
+            OUTPUT_GUARDRAILS_HOME if home_mode else OUTPUT_GUARDRAILS,
         ]
     )
     return "\n".join(parts)
+
+
+def get_settings_summary_cap() -> int:
+    try:
+        from config import get_settings
+
+        return max(80, int(get_settings().memory_summary_max_chars))
+    except Exception:
+        return 400

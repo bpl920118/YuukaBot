@@ -5,3 +5,6 @@ storage/images/*
 __pycache__/
 *.db
 *.pyc
+.pytest_cache/
+scripts/_temp*.txt
+scripts/_probe*.txt

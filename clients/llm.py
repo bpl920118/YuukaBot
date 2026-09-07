@@ -29,6 +29,23 @@ _RETRY_NUDGE = (
 )
 
 
+_THINK_RE = re.compile(
+    r"<think>.*?</think>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _strip_think_blocks(text: str) -> str:
+    """Qwen3／部分本地模會先吐 think；剝掉再解析 JSON。"""
+    raw = text or ""
+    cleaned = _THINK_RE.sub("", raw)
+    if "</think>" in cleaned:
+        cleaned = cleaned.split("</think>")[-1]
+    if "<think>" in cleaned:
+        cleaned = re.sub(r"<think>.*", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    return cleaned.strip()
+
+
 def _normalize_reply(text: str) -> str:
     return re.sub(r"\s+", "", (text or "").strip())
 
@@ -94,12 +111,12 @@ def _coerce_message_text(message: dict[str, Any]) -> str:
     Prefer message.content. DeepSeek thinking mode often leaves content empty
     and spends the token budget on reasoning_content (finish_reason=length).
     """
-    content = _parts_to_text(message.get("content"))
+    content = _strip_think_blocks(_parts_to_text(message.get("content")))
     if content:
         return content
 
     for key in ("reasoning_content", "reasoning"):
-        reasoning = _parts_to_text(message.get(key))
+        reasoning = _strip_think_blocks(_parts_to_text(message.get(key)))
         if not reasoning:
             continue
         salvaged = _salvage_reply_field(reasoning)
@@ -120,6 +137,38 @@ class LlmClient:
         self.model = s.deepseek_model
         self.depth = s.deepseek_depth
 
+    @staticmethod
+    def _resolve_sampling(
+        settings,
+        *,
+        base_url: str,
+        temperature: float | None,
+        top_p: float | None,
+        max_tokens: int | None,
+        sampling_profile: str,
+        is_home: bool,
+    ) -> tuple[float, float, int]:
+        profile = (sampling_profile or "chat").strip().lower()
+        if profile == "momotalk":
+            temp = settings.momotalk_temperature
+            top = settings.momotalk_top_p
+            mx = settings.momotalk_max_tokens
+        elif is_home:
+            temp = settings.home_llm_temperature
+            top = settings.home_llm_top_p
+            mx = settings.llm_max_tokens
+        else:
+            temp = settings.llm_temperature
+            top = settings.llm_top_p
+            mx = settings.llm_max_tokens
+        if temperature is not None:
+            temp = float(temperature)
+        if top_p is not None:
+            top = float(top_p)
+        if max_tokens is not None:
+            mx = int(max_tokens)
+        return temp, top, max(32, mx)
+
     async def chat(
         self,
         *,
@@ -130,11 +179,22 @@ class LlmClient:
         last_reply: str | None = None,
         api_key: str | None = None,
         base_url: str | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        max_tokens: int | None = None,
+        sampling_profile: str = "chat",
     ) -> str:
         use_key = ((api_key if api_key is not None else self.api_key) or "").strip()
         use_base = ((base_url if base_url is not None else self.base_url) or "").strip().rstrip(
             "/"
         ) or self.base_url
+        from core.home_llm import (
+            home_api_key_or_placeholder,
+            is_home_inference_url,
+            should_omit_json_response_format,
+        )
+
+        use_key = home_api_key_or_placeholder(use_key, use_base)
         if not use_key:
             return json.dumps(
                 {
@@ -153,6 +213,16 @@ class LlmClient:
         settings = get_settings()
         thinking_ok = supports_thinking(use_base)
 
+        use_temp, use_top_p, use_max = self._resolve_sampling(
+            settings,
+            base_url=use_base,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            sampling_profile=sampling_profile,
+            is_home=is_home_inference_url(use_base),
+        )
+
         # Soft-fallback lines in memory must not trigger near-duplicate rejection.
         effective_last = (
             None
@@ -163,16 +233,17 @@ class LlmClient:
         payload: dict[str, Any] = {
             "model": use_model,
             "messages": [{"role": "system", "content": system}, *messages],
-            "max_tokens": settings.llm_max_tokens,
-            "response_format": {"type": "json_object"},
-            "temperature": settings.llm_temperature,
-            "top_p": settings.llm_top_p,
+            "max_tokens": use_max,
+            "temperature": use_temp,
+            "top_p": use_top_p,
         }
+        if not should_omit_json_response_format(use_base):
+            payload["response_format"] = {"type": "json_object"}
         # DeepSeek-only thinking fields — other gateways may reject unknown keys.
         thinking_on = thinking_ok and use_depth != "off"
         if thinking_ok:
             if thinking_on:
-                payload["max_tokens"] = max(settings.llm_max_tokens, 768) + 2048
+                payload["max_tokens"] = max(use_max, 768) + 2048
                 payload["thinking"] = {"type": "enabled"}
                 payload["reasoning_effort"] = use_depth  # high | max
                 payload.pop("temperature", None)
@@ -197,9 +268,9 @@ class LlmClient:
                 attempt_payload = {
                     **attempt_payload,
                     "thinking": {"type": "disabled"},
-                    "max_tokens": settings.llm_max_tokens,
-                    "temperature": settings.llm_temperature,
-                    "top_p": settings.llm_top_p,
+                    "max_tokens": use_max,
+                    "temperature": use_temp,
+                    "top_p": use_top_p,
                 }
                 attempt_payload.pop("reasoning_effort", None)
             try:
@@ -323,7 +394,7 @@ class LlmClient:
 
     @staticmethod
     def _extract_json(raw: str) -> dict[str, Any]:
-        raw = raw.strip()
+        raw = _strip_think_blocks(raw)
         if raw.startswith("```"):
             raw = re.sub(r"^```(?:json)?\s*", "", raw)
             raw = re.sub(r"\s*```$", "", raw)
