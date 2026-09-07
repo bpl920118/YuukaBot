@@ -40,7 +40,15 @@ from core.providers import (
 from core.scoring import AffectionScorer
 from clients.webui import WebuiClient, normalize_webui_url
 from clients.llm import LlmClient, is_near_duplicate
-from clients.vram_switch import prepare_for_sd, restore_after_sd
+from clients.vram_switch import (
+    agent_configured,
+    agent_status,
+    ensure_home_llm_for_chat,
+    prepare_for_sd,
+    restore_after_sd,
+    switch_to_llm,
+    switch_to_sd,
+)
 from db.repository import Repository
 
 
@@ -215,6 +223,8 @@ class ChatPipeline:
 
         base_url, api_key, model = _resolve_guild_endpoint(guild_settings, settings)
         home_mode = is_home_inference_url(base_url)
+        if home_mode:
+            await ensure_home_llm_for_chat(base_url)
 
         await self._maybe_compact_memory(
             guild_id=guild_id,
@@ -1000,8 +1010,75 @@ class ChatPipeline:
             f"生圖狀態 `{flag}`\n"
             f"有效網址：`{effective}`\n"
             f"{detail}\n"
-            "設定：`/image url`；關閉：`/image off`；測試：`/image test`。"
+            "設定：`/image url`；關閉：`/image off`；測試：`/image test`。\n"
+            "同卡切換：`/vram status`。"
         )
+
+    async def describe_vram(self, guild_id: int) -> str:
+        settings = get_settings()
+        guild_settings = await self.repo.get_or_create_settings(guild_id)
+        base_url, _, model = _resolve_guild_endpoint(guild_settings, settings)
+        agent_url = (settings.home_vram_agent_url or "").strip() or "（未設定）"
+        lines = [
+            f"文字 LLM URL：`{base_url}`",
+            f"model：`{model}`",
+            f"home_mode：`{is_home_inference_url(base_url)}`",
+            f"VRAM agent：`{agent_url}`",
+            f"生圖後切回 LLM：`{settings.home_vram_reload_llm}`",
+            f"家用聊天自動確保 LLM：`{settings.home_vram_ensure_llm_on_chat}`",
+        ]
+        if not agent_configured():
+            lines.append(
+                "尚未設定 `HOME_VRAM_AGENT_URL`。"
+                "家裡跑 `YuukaLocalLLM\\start_vram_agent.bat`，再用 Tailscale IP 填入 Grok `.env`。"
+            )
+            return "\n".join(lines)
+        st = await agent_status()
+        if not st:
+            lines.append("agent 無回應。")
+        elif st.get("error"):
+            lines.append(f"agent 錯誤：`{st.get('error')}`")
+        else:
+            lines.append(
+                f"agent OK｜kobold_up=`{st.get('kobold_up')}` "
+                f"webui_up=`{st.get('webui_up')}`"
+            )
+            lines.append(
+                f"kobold=`{st.get('kobold_url')}` webui=`{st.get('webui_url')}`"
+            )
+        lines.append("手動：`/vram to_sd`（生圖）／`/vram to_llm`（文字）。")
+        return "\n".join(lines)
+
+    async def vram_switch_mode(self, mode: str) -> str:
+        mode = (mode or "").strip().lower()
+        if mode in {"sd", "to_sd", "image", "webui"}:
+            data = await switch_to_sd()
+            return self._format_vram_switch("SD／生圖", data)
+        if mode in {"llm", "to_llm", "text", "kobold"}:
+            data = await switch_to_llm()
+            return self._format_vram_switch("文字 LLM", data)
+        return "用法：`/vram to_sd` 或 `/vram to_llm`。"
+
+    @staticmethod
+    def _format_vram_switch(label: str, data: dict) -> str:
+        ok = bool(data.get("ok"))
+        err = data.get("error")
+        st = data.get("status") if isinstance(data.get("status"), dict) else {}
+        lines = [f"切換→**{label}**：`{'OK' if ok else 'NG'}`"]
+        if err:
+            lines.append(f"錯誤：`{err}`")
+        if st:
+            lines.append(
+                f"kobold_up=`{st.get('kobold_up')}` webui_up=`{st.get('webui_up')}`"
+            )
+        notes = []
+        for key in ("kobold", "webui"):
+            block = data.get(key)
+            if isinstance(block, dict) and block.get("notes"):
+                notes.extend(str(n) for n in block["notes"][:4])
+        if notes:
+            lines.append("細節：" + "；".join(notes))
+        return "\n".join(lines)
 
     async def set_image_url(self, guild_id: int, url_raw: str) -> str:
         guild_settings = await self.repo.get_or_create_settings(guild_id)

@@ -371,6 +371,43 @@ class SlashCog(commands.Cog):
                 files.append(discord.File(path, filename=path.name))
         await interaction.followup.send(result["reply"], files=files)
 
+    # ── teacher: vram group（文字 LLM ↔ 生圖同卡切換）────────
+
+    vram = app_commands.Group(
+        name="vram",
+        description="家用文字 LLM／生圖 VRAM 切換（僅管理者）",
+    )
+
+    @vram.command(name="status", description="查看 VRAM agent／Kobold／WebUI 狀態")
+    @owner_only()
+    async def vram_status(self, interaction: discord.Interaction) -> None:
+        gid = await _require_guild(interaction)
+        if gid is None:
+            return
+        await interaction.response.defer(ephemeral=True)
+        text = await self.pipeline.describe_vram(gid)
+        await interaction.followup.send(text, ephemeral=True)
+
+    @vram.command(name="to_sd", description="切到生圖（關 Kobold、開 WebUI）")
+    @owner_only()
+    async def vram_to_sd(self, interaction: discord.Interaction) -> None:
+        gid = await _require_guild(interaction)
+        if gid is None:
+            return
+        await interaction.response.defer(ephemeral=True)
+        text = await self.pipeline.vram_switch_mode("sd")
+        await interaction.followup.send(text, ephemeral=True)
+
+    @vram.command(name="to_llm", description="切到文字 LLM（可關 WebUI、開 Kobold）")
+    @owner_only()
+    async def vram_to_llm(self, interaction: discord.Interaction) -> None:
+        gid = await _require_guild(interaction)
+        if gid is None:
+            return
+        await interaction.response.defer(ephemeral=True)
+        text = await self.pipeline.vram_switch_mode("llm")
+        await interaction.followup.send(text, ephemeral=True)
+
     # ── score（共用好感；對話不顯示）────────────────────────
 
     score = app_commands.Group(

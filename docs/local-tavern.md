@@ -28,9 +28,9 @@ Sampling (`.env`):
 
 | Var | Default | Use |
 |-----|---------|-----|
-| `LLM_TEMPERATURE` | `0.85` | Cloud chat |
-| `HOME_LLM_TEMPERATURE` | `0.7` | Home Qwen／Kobold chat（穩人設／JSON） |
-| `MOMOTALK_TEMPERATURE` | `0.85` | 主動動態（世界表約束；家用略穩） |
+| `LLM_TEMPERATURE` | `0.95` | Cloud chat |
+| `HOME_LLM_TEMPERATURE` | `0.9` | Home Qwen／Kobold chat |
+| `MOMOTALK_TEMPERATURE` | `0.95` | 主動動態（世界表約束） |
 
 Probe: `python scripts/probe_world_momotalk.py`（只抽樣）或加 `--llm`（打本地 Kobold）。
 
@@ -99,12 +99,6 @@ SD_WEBUI_URL=http://127.0.0.1:7860
 # or Tailscale WebUI URL when bot is on Grok
 ```
 
-Manual test:
-
-```bash
-curl -H "Authorization: Bearer yuuka-local" http://127.0.0.1:5010/status
-curl -X POST -H "Authorization: Bearer yuuka-local" http://127.0.0.1:5010/switch/sd
-curl -X POST -H "Authorization: Bearer yuuka-local" http://127.0.0.1:5010/switch/llm
-```
+Manual Discord: `/vram status` · `/vram to_sd` · `/vram to_llm`
 
 Without the agent, bot still tries soft Kobold abort (often not enough on 8GB).

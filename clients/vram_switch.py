@@ -1,4 +1,4 @@
-"""Release / switch home-PC LLM VRAM before SD WebUI on the same GPU."""
+"""Release / switch home-PC text LLM VRAM before SD WebUI on the same GPU."""
 
 from __future__ import annotations
 
@@ -21,13 +21,12 @@ def _origin(base_url: str) -> str:
     return (base_url or "").rstrip("/")
 
 
-async def release_home_llm_vram(base_url: str, model: str | None = None) -> None:
-    """Best-effort unload so A1111/Forge can use the same 8GB card.
+def agent_configured() -> bool:
+    return bool((get_settings().home_vram_agent_url or "").strip())
 
-    - Ollama: POST /api/generate keep_alive=0
-    - KoboldCPP: try /api/extra/abort (frees generation; full unload may need agent)
-    Cloud / non-home URLs: no-op.
-    """
+
+async def release_home_llm_vram(base_url: str, model: str | None = None) -> None:
+    """Best-effort unload so A1111/Forge can use the same 8GB card."""
     if not is_home_inference_url(base_url):
         return
     origin = _origin(base_url)
@@ -67,7 +66,12 @@ async def release_home_llm_vram(base_url: str, model: str | None = None) -> None
     )
 
 
-async def _agent_post(path: str, *, timeout: float) -> dict[str, Any] | None:
+async def _agent_request(
+    method: str,
+    path: str,
+    *,
+    timeout: float | None = None,
+) -> dict[str, Any] | None:
     settings = get_settings()
     agent = (settings.home_vram_agent_url or "").strip().rstrip("/")
     if not agent:
@@ -75,15 +79,40 @@ async def _agent_post(path: str, *, timeout: float) -> dict[str, Any] | None:
     token = (settings.home_vram_agent_token or "").strip()
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     url = f"{agent}{path}"
+    to = float(timeout if timeout is not None else settings.home_vram_agent_timeout or 240)
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(url, headers=headers)
+        async with httpx.AsyncClient(timeout=to) as client:
+            resp = await client.request(method, url, headers=headers)
             resp.raise_for_status()
             data = resp.json()
             return data if isinstance(data, dict) else {"ok": False, "raw": data}
     except Exception as exc:
-        logger.warning("VRAM agent %s failed: %s", path, exc)
+        logger.warning("VRAM agent %s %s failed: %s", method, path, exc)
         return {"ok": False, "error": str(exc)}
+
+
+async def agent_status() -> dict[str, Any] | None:
+    if not agent_configured():
+        return None
+    return await _agent_request("GET", "/status", timeout=15.0)
+
+
+async def switch_to_sd() -> dict[str, Any]:
+    if not agent_configured():
+        return {"ok": False, "error": "HOME_VRAM_AGENT_URL 未設定"}
+    return (await _agent_request("POST", "/switch/sd")) or {
+        "ok": False,
+        "error": "no response",
+    }
+
+
+async def switch_to_llm() -> dict[str, Any]:
+    if not agent_configured():
+        return {"ok": False, "error": "HOME_VRAM_AGENT_URL 未設定"}
+    return (await _agent_request("POST", "/switch/llm")) or {
+        "ok": False,
+        "error": "no response",
+    }
 
 
 async def prepare_for_sd(
@@ -92,41 +121,51 @@ async def prepare_for_sd(
     *,
     sd_base_url: str | None = None,
 ) -> dict[str, Any]:
-    """Before txt2img: ask home agent to free LLM + ensure WebUI, else soft unload."""
-    settings = get_settings()
+    """Before txt2img: agent → SD, else soft unload."""
     result: dict[str, Any] = {"agent": None, "fallback": False}
-    agent_url = (settings.home_vram_agent_url or "").strip()
-    # Prefer agent whenever configured (works for cloud bot → Tailscale home).
-    if agent_url:
-        timeout = float(settings.home_vram_agent_timeout or 240)
-        data = await _agent_post("/switch/sd", timeout=timeout)
+    if agent_configured():
+        data = await switch_to_sd()
         result["agent"] = data
-        if data and data.get("ok"):
-            logger.info("VRAM: agent switched to SD")
+        if data.get("ok"):
+            logger.info("VRAM: switched to SD")
             return result
-        logger.warning("VRAM: agent switch/sd not ok: %s", data)
-    # Fallback: soft API unload when chatting via home LLM URL.
-    if is_home_inference_url(llm_base_url) or agent_url:
+        logger.warning("VRAM: switch/sd not ok: %s", data)
+    if is_home_inference_url(llm_base_url) or agent_configured():
         await release_home_llm_vram(llm_base_url, model)
         result["fallback"] = True
-    _ = sd_base_url  # reserved for future health gate
+    _ = sd_base_url
     return result
 
 
 async def restore_after_sd(llm_base_url: str, model: str | None = None) -> dict[str, Any]:
-    """After txt2img: optionally bring Kobold back via agent."""
+    """After txt2img: switch back to text LLM when enabled."""
     settings = get_settings()
     result: dict[str, Any] = {"agent": None, "skipped": True}
-    if not settings.home_vram_reload_llm:
+    if not settings.home_vram_reload_llm or not agent_configured():
         return result
-    agent_url = (settings.home_vram_agent_url or "").strip()
-    if not agent_url:
-        return result
-    # Only auto-reload when the guild/chat path is home LLM, or always if configured.
-    if settings.home_vram_reload_llm_always or is_home_inference_url(llm_base_url):
-        timeout = float(settings.home_vram_agent_timeout or 240)
-        data = await _agent_post("/switch/llm", timeout=timeout)
-        result = {"agent": data, "skipped": False}
-        logger.info("VRAM: agent switch/llm -> %s", (data or {}).get("ok"))
-    _ = model
+    data = await switch_to_llm()
+    result = {"agent": data, "skipped": False}
+    logger.info("VRAM: switch/llm -> %s", (data or {}).get("ok"))
+    _ = llm_base_url, model
     return result
+
+
+async def ensure_home_llm_for_chat(llm_base_url: str) -> dict[str, Any] | None:
+    """Home-LLM chat: if Kobold is down, auto switch back from SD."""
+    if not agent_configured() or not is_home_inference_url(llm_base_url):
+        return None
+    if not get_settings().home_vram_ensure_llm_on_chat:
+        return None
+    st = await agent_status()
+    if not isinstance(st, dict) or st.get("error"):
+        return st
+    if st.get("kobold_up"):
+        return {"ok": True, "skipped": True, "status": st}
+    logger.info("VRAM: home chat but kobold down → switch/llm")
+    data = await switch_to_llm()
+    return {
+        "ok": bool((data or {}).get("ok")),
+        "switched": True,
+        "agent": data,
+        "status": st,
+    }

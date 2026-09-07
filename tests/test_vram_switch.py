@@ -11,7 +11,8 @@ def test_prepare_for_sd_noop_without_agent(monkeypatch) -> None:
         home_vram_agent_token = "x"
         home_vram_agent_timeout = 10
         home_vram_reload_llm = True
-        home_vram_reload_llm_always = False
+        home_vram_reload_llm_always = True
+        home_vram_ensure_llm_on_chat = True
 
     monkeypatch.setattr(vs, "get_settings", lambda: S())
     called = {"n": 0}
@@ -32,16 +33,36 @@ def test_prepare_for_sd_calls_agent(monkeypatch) -> None:
         home_vram_agent_token = "tok"
         home_vram_agent_timeout = 10
         home_vram_reload_llm = True
-        home_vram_reload_llm_always = False
+        home_vram_reload_llm_always = True
+        home_vram_ensure_llm_on_chat = True
 
     monkeypatch.setattr(vs, "get_settings", lambda: S())
 
-    async def fake_post(path: str, *, timeout: float):
-        assert path == "/switch/sd"
+    async def fake_switch():
         return {"ok": True, "mode": "sd"}
 
-    monkeypatch.setattr(vs, "_agent_post", fake_post)
+    monkeypatch.setattr(vs, "switch_to_sd", fake_switch)
     out = asyncio.run(vs.prepare_for_sd("http://127.0.0.1:5001/v1", "m"))
+    assert out["agent"]["ok"] is True
+
+
+def test_restore_when_reload_on(monkeypatch) -> None:
+    class S:
+        home_vram_agent_url = "http://127.0.0.1:5010"
+        home_vram_agent_token = "tok"
+        home_vram_agent_timeout = 10
+        home_vram_reload_llm = True
+        home_vram_reload_llm_always = True
+        home_vram_ensure_llm_on_chat = True
+
+    monkeypatch.setattr(vs, "get_settings", lambda: S())
+
+    async def fake_switch():
+        return {"ok": True, "mode": "llm"}
+
+    monkeypatch.setattr(vs, "switch_to_llm", fake_switch)
+    out = asyncio.run(vs.restore_after_sd("https://api.deepseek.com", "m"))
+    assert out["skipped"] is False
     assert out["agent"]["ok"] is True
 
 
@@ -51,8 +72,33 @@ def test_restore_respects_flag(monkeypatch) -> None:
         home_vram_agent_token = "tok"
         home_vram_agent_timeout = 10
         home_vram_reload_llm = False
-        home_vram_reload_llm_always = False
+        home_vram_reload_llm_always = True
+        home_vram_ensure_llm_on_chat = True
 
     monkeypatch.setattr(vs, "get_settings", lambda: S())
     out = asyncio.run(vs.restore_after_sd("http://127.0.0.1:5001/v1", "m"))
     assert out["skipped"] is True
+
+
+def test_ensure_home_llm_switches_when_down(monkeypatch) -> None:
+    class S:
+        home_vram_agent_url = "http://127.0.0.1:5010"
+        home_vram_agent_token = "tok"
+        home_vram_agent_timeout = 10
+        home_vram_reload_llm = True
+        home_vram_reload_llm_always = True
+        home_vram_ensure_llm_on_chat = True
+
+    monkeypatch.setattr(vs, "get_settings", lambda: S())
+    monkeypatch.setattr(vs, "is_home_inference_url", lambda url: True)
+
+    async def fake_status():
+        return {"ok": True, "kobold_up": False, "webui_up": True}
+
+    async def fake_switch():
+        return {"ok": True, "mode": "llm"}
+
+    monkeypatch.setattr(vs, "agent_status", fake_status)
+    monkeypatch.setattr(vs, "switch_to_llm", fake_switch)
+    out = asyncio.run(vs.ensure_home_llm_for_chat("http://127.0.0.1:5001/v1"))
+    assert out and out.get("switched") is True

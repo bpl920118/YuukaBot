@@ -31,15 +31,15 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
     # Flash chat sampling (ignored by API when thinking is on)
     # Cloud default slightly below 1.0 — tighter Yuuka voice, less drift.
-    llm_temperature: float = 0.85
-    llm_top_p: float = 0.9
+    llm_temperature: float = 0.95
+    llm_top_p: float = 0.92
     llm_max_tokens: int = 512
-    # Home Qwen／Kobold：偏低溫，JSON＋人設較穩
-    home_llm_temperature: float = 0.7
-    home_llm_top_p: float = 0.9
-    # MomoTalk 主動動態：略高溫換場景變化（仍受 world 地點／行動約束）
-    momotalk_temperature: float = 0.85
-    momotalk_top_p: float = 0.9
+    # Home Qwen／Kobold：略提高溫換說法；仍靠短卡禁套話壓住跑題
+    home_llm_temperature: float = 0.9
+    home_llm_top_p: float = 0.92
+    # MomoTalk 主動動態
+    momotalk_temperature: float = 0.95
+    momotalk_top_p: float = 0.92
     momotalk_max_tokens: int = 220
 
     # Stable Diffusion WebUI (A1111 / Forge). Empty URL => skip image generation.
@@ -84,10 +84,12 @@ class Settings(BaseSettings):
     home_vram_agent_url: str = ""
     home_vram_agent_token: str = "yuuka-local"
     home_vram_agent_timeout: int = 240
-    # After CG, ask agent to bring Kobold back (stops WebUI by default on agent side).
+    # After CG, ask agent to bring text LLM back (agent may stop WebUI).
     home_vram_reload_llm: bool = True
-    # Also reload when chat used cloud LLM (still useful if you want Kobold ready locally).
-    home_vram_reload_llm_always: bool = False
+    # Kept for .env compatibility; reload follows home_vram_reload_llm.
+    home_vram_reload_llm_always: bool = True
+    # Home-LLM chat: if Kobold was stopped for CG, auto switch back before reply.
+    home_vram_ensure_llm_on_chat: bool = True
 
 
 @lru_cache
