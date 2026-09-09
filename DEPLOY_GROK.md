@@ -98,6 +98,7 @@ YuukaBot 有新 commit。請到 /workspace/YuukaBot：
 2. source .venv/bin/activate && pip install -r requirements.txt
 3. 編輯 .env（保留密鑰，對齊 .env.example 新增欄位；勿把密鑰貼回對話）：
    - LLM_TEMPERATURE=0.95 / HOME_LLM_TEMPERATURE=0.9 / MOMOTALK_TEMPERATURE=0.95
+   - LLM_MAX_TOKENS=2048（雲端長回覆；勿把完整 .env 貼回對話）
    - LORE_SCAN_DEPTH=6 / LORE_MAX_CHARS=900 / MEMORY_SUMMARY_MAX_CHARS=400
    - GEMINI_API_KEY=（建議填：主路空回 ≥2 次會熱備切 Gemini，不改 /api switch）
    - HOME_VRAM_AGENT_URL=（有 Tailscale+agent 再填 http://100.x:5010；否則留空）

@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     # Cloud default slightly below 1.0 — tighter Yuuka voice, less drift.
     llm_temperature: float = 0.95
     llm_top_p: float = 0.92
-    llm_max_tokens: int = 512
+    llm_max_tokens: int = 2048
     # Home Qwen／Kobold：略提高溫換說法；仍靠短卡禁套話壓住跑題
     home_llm_temperature: float = 0.9
     home_llm_top_p: float = 0.92

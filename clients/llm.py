@@ -120,7 +120,7 @@ def _salvage_reply_field(raw: str) -> dict[str, Any] | None:
     if len(reply) < 2:
         return None
     return {
-        "reply": reply[:1500],
+        "reply": reply[:2500],
         "emotion": "neutral",
         "trigger_cg": False,
         "cg_tier": "none",
@@ -606,7 +606,7 @@ class LlmClient:
                     pass
             text = (raw or "").strip()
             if text and not text.startswith("{"):
-                return LlmChatResult(reply=text[:1500], emotion="neutral")
+                return LlmChatResult(reply=text[:2500], emotion="neutral")
             return LlmChatResult(reply=_PARSE_FALLBACK, emotion="flustered")
 
     @staticmethod
