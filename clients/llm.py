@@ -30,7 +30,7 @@ _PARSE_FALLBACK = (
 )
 _AUTH_FALLBACK = (
     "……計算機連不上帳本伺服器：API 金鑰無效或過期（HTTP 401／403）。"
-    "請用 `/api status` 檢查網址與金鑰，或改 `/api preset`。"
+    "請用 `/api status` 檢查網址與金鑰，或改 `/api switch`。"
 )
 _RETRY_NUDGE = (
     "[系統] 上一則輸出無效。請重新只輸出合法 JSON；"

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from config import get_settings
 from core.prompt_builder import build_image_prompt, heuristic_image_tags
@@ -37,7 +37,15 @@ from core.providers import (
     resolve_model_name,
     supports_thinking,
 )
-from core.scoring import AffectionScorer
+from core.scoring import (
+    AffectionScorer,
+    checkin_delta,
+    crossed_milestones,
+    current_title,
+    daily_checkin_event_key,
+    milestone_map,
+    next_checkin_streak,
+)
 from clients.webui import WebuiClient, normalize_webui_url
 from clients.llm import LlmClient, is_near_duplicate
 from clients.vram_switch import (
@@ -406,6 +414,13 @@ class ChatPipeline:
             emotion=result.emotion,
         )
 
+        unlock_lines = await self._claim_milestones(
+            guild_id=guild_id,
+            user_id=user_id,
+            old_affection=old_affection,
+            new_affection=new_affection,
+        )
+
         threshold = self._cg_threshold(guild_settings)
         score_unlock = new_affection >= threshold >= 1
         pending_cg = None
@@ -443,8 +458,12 @@ class ChatPipeline:
                         character_id=self.character_id,
                     )
 
+        reply = result.reply
+        if unlock_lines:
+            reply = f"{reply}\n\n" + "\n\n".join(unlock_lines)
+
         return {
-            "reply": result.reply,
+            "reply": reply,
             "emotion": result.emotion,
             "image_path": None,
             "pending_cg": pending_cg,
@@ -654,12 +673,202 @@ class ChatPipeline:
         tier = "special" if requested_tier == "special" else "normal"
         return True, tier
 
+    async def _claim_milestones(
+        self,
+        *,
+        guild_id: int,
+        user_id: int,
+        old_affection: int,
+        new_affection: int,
+    ) -> list[str]:
+        milestones = milestone_map(self.character)
+        if not milestones:
+            return []
+        lines: list[str] = []
+        for threshold in crossed_milestones(old_affection, new_affection, milestones):
+            event_key = f"unlock:{threshold}"
+            if await self.repo.has_event_key(guild_id, event_key):
+                continue
+            meta = milestones.get(threshold) or {}
+            title = str(meta.get("title") or f"{threshold}").strip()
+            line = str(meta.get("line") or "").strip()
+            await self.repo.add_score_event(
+                guild_id=guild_id,
+                category="milestone",
+                amount=0,
+                reason=f"解鎖稱號：{title}",
+                user_id=user_id,
+                event_key=event_key,
+                character_id=self.character_id,
+            )
+            block = f"【好感解鎖｜{title}】"
+            if line:
+                block = f"{block}\n{line}"
+            lines.append(block)
+        return lines
+
+    async def handle_checkin(
+        self,
+        *,
+        guild_id: int,
+        user_id: int,
+        display_name: str,
+    ) -> dict:
+        """
+        Guild-level daily check-in.
+        First claim of the day updates streak/affection and may call the LLM.
+        Later claims return a static line with no API call.
+        """
+        today = date.today()
+        today_s = today.isoformat()
+        event_key = daily_checkin_event_key(today)
+        bond = await self.repo.get_or_create_bond(guild_id, self.character_id)
+        streak_now = int(bond.checkin_streak or 0)
+        last = (bond.last_checkin_date or "").strip()
+
+        already = last == today_s or await self.repo.has_event_key(guild_id, event_key)
+        if already:
+            title = current_title(int(bond.affection), milestone_map(self.character))
+            title_bit = f"\n目前稱號：{title}" if title else ""
+            return {
+                "reply": (
+                    f"（頭也不抬，繼續按計算機）今天本伺服器已經簽到過了——"
+                    f"連簽 `{max(1, streak_now)}` 天。重複簽到不會再叫我回話。"
+                    f"{title_bit}"
+                ),
+                "emotion": "neutral",
+                "already": True,
+                "used_llm": False,
+                "streak": max(1, streak_now) if streak_now else 0,
+            }
+
+        streak = next_checkin_streak(last, streak_now, today)
+        delta = checkin_delta(streak, self.character.get("scoring") or {})
+        old_affection = int(bond.affection)
+        new_affection = max(0, min(100, old_affection + delta))
+
+        await self.repo.add_score_event(
+            guild_id=guild_id,
+            category="checkin",
+            amount=delta,
+            reason=f"每日簽到（連簽 {streak} 天）",
+            user_id=user_id,
+            event_key=event_key,
+            character_id=self.character_id,
+        )
+        await self.repo.update_bond(
+            guild_id,
+            affection=new_affection,
+            checkin_streak=streak,
+            last_checkin_date=today_s,
+            character_id=self.character_id,
+        )
+
+        unlock_lines = await self._claim_milestones(
+            guild_id=guild_id,
+            user_id=user_id,
+            old_affection=old_affection,
+            new_affection=new_affection,
+        )
+
+        settings = get_settings()
+        guild_settings = await self.repo.get_or_create_settings(guild_id)
+        base_url, api_key, model = _resolve_guild_endpoint(guild_settings, settings)
+        home_mode = is_home_inference_url(base_url)
+        if home_mode:
+            await ensure_home_llm_for_chat(base_url)
+
+        checkin_user_text = (
+            f"（老師簽到了。這是本伺服器今天的第一次簽到，連續第 {streak} 天。"
+            "請用早瀨優香的口吻簡短回應簽到：可吐槽、可提醒對帳，"
+            "但不要提到好感度、分數或數值獎勵。）"
+        )
+        memory_summary = await self.repo.get_memory_summary(
+            guild_id, self.character_id
+        )
+        system = build_runtime_system(
+            self._base_prompt_for(home_mode=home_mode),
+            extra_layers=guild_settings.extra_layers or "",
+            work_mode=False,
+            lore="",
+            memory_summary=memory_summary,
+            home_mode=home_mode,
+        )
+        messages = [
+            {
+                "role": "user",
+                "content": _user_message_payload(
+                    user_id=user_id,
+                    text=checkin_user_text,
+                ),
+            }
+        ]
+        depth = resolve_depth(guild_settings.llm_depth, settings.deepseek_depth)
+        reply_text = ""
+        emotion = "neutral"
+        used_llm = False
+        try:
+            raw = await self.llm.chat(
+                system=system,
+                messages=messages,
+                model=model,
+                depth=depth,
+                api_key=api_key,
+                base_url=base_url,
+                max_tokens=min(256, int(settings.llm_max_tokens or 256)),
+            )
+            result = self.llm.parse_result(raw)
+            reply_text = scrub_score_leak(result.reply)
+            emotion = result.emotion
+            used_llm = True
+        except Exception:
+            reply_text = (
+                f"（蓋上計算機）簽到登記好了。連簽第 `{streak}` 天——"
+                "別以為這樣就能少交收據。"
+            )
+            used_llm = False
+
+        memory_user = f"（簽到：本伺服器連續第 {streak} 天）"
+        await self.repo.add_message(
+            guild_id=guild_id,
+            role="user",
+            content=memory_user,
+            user_id=user_id,
+            display_name=display_name,
+            character_id=self.character_id,
+        )
+        await self.repo.add_message(
+            guild_id=guild_id,
+            role="assistant",
+            content=reply_text,
+            character_id=self.character_id,
+        )
+
+        reply = reply_text
+        if unlock_lines:
+            reply = f"{reply}\n\n" + "\n\n".join(unlock_lines)
+
+        return {
+            "reply": reply,
+            "emotion": emotion,
+            "already": False,
+            "used_llm": used_llm,
+            "streak": streak,
+            "delta": delta,
+        }
+
     async def describe_score(self, guild_id: int) -> str:
         bond = await self.repo.get_or_create_bond(guild_id, self.character_id)
         guild_settings = await self.repo.get_or_create_settings(guild_id)
         threshold = self._cg_threshold(guild_settings)
+        streak = int(bond.checkin_streak or 0)
+        last = (bond.last_checkin_date or "").strip() or "尚未簽到"
+        title = current_title(int(bond.affection), milestone_map(self.character))
+        title_line = f"目前稱號：`{title}`\n" if title else "目前稱號：（尚未解鎖）\n"
         return (
             f"本伺服器共用好感：`{bond.affection}/100`\n"
+            f"{title_line}"
+            f"簽到連簽：`{streak}` 天（上次：`{last}`）\n"
             f"自動生圖門檻：`{threshold}`（達到後依當下對話產關鍵字並出圖，並扣除門檻分數）\n"
             f"目前情緒標記：`{bond.emotion}`\n"
             "對話裡不會顯示分數；查詢請用本指令。"
@@ -765,7 +974,7 @@ class ChatPipeline:
         else:
             override = f".env LLM_PROVIDER=`{normalize_provider_id(settings.llm_provider)}`"
         key_src = _key_source_label(guild_settings, settings, provider)
-        model_src = "伺服器 /model" if has_guild_model else f".env（{provider} 預設）"
+        model_src = "伺服器 /api model" if has_guild_model else f".env（{provider} 預設）"
         note = ""
         if guild_settings.llm_immersion and (
             depth == "off" or not supports_thinking(base_url)
@@ -781,7 +990,7 @@ class ChatPipeline:
             f"model=`{model}` ← {model_src}\n"
             f"depth=`{depth}` 沉浸=`{immersion}`\n"
             f"{model_menu_lines(provider)}\n"
-            "切換：`/api switch`（推薦）· `/api help` · `/model` · `/depth`"
+            "切換：`/api switch`（推薦）· `/api help` · `/api model` · `/api depth`"
             f"{note}"
         )
 
@@ -792,10 +1001,11 @@ class ChatPipeline:
             "1. `.env` 可同時填 `DEEPSEEK_API_KEY`、`GEMINI_API_KEY`、`OPENAI_API_KEY`\n"
             "2. Discord 用 `/api switch` 一次選好廠商＋模型（會改用對應 .env 金鑰）\n"
             "3. `/api test` 確認連線；`/api status` 看目前狀態\n"
-            "4. 只改同廠商模型可用 `/model`（flash／pro／lite）\n"
-            "5. `/api clear` 清掉伺服器覆寫，改回 `.env` 的 `LLM_PROVIDER`\n\n"
+            "4. 只改同廠商模型用 `/api model`（flash／pro／lite 或完整 id）\n"
+            "5. 深度／沉浸：`/api depth`、`/api immersion`\n"
+            "6. `/api clear` 清掉伺服器覆寫，改回 `.env` 的 `LLM_PROVIDER`\n\n"
             f"**`/api switch` 選項：**\n{profiles}\n\n"
-            "進階：`/api preset`、`/api url`、`/api key`、`/api model`"
+            "進階：`/api url`、`/api key`"
         )
 
     async def set_model(self, guild_id: int, arg: str) -> str:
@@ -895,7 +1105,7 @@ class ChatPipeline:
             f"base=`{preset.base_url}`\n"
             f"model=`{preset.default_model}`"
             f"{tip}\n"
-            f"同廠商換模型：`/model`（{model_menu_lines(preset.id)}）\n"
+            f"同廠商換模型：`/api model`（{model_menu_lines(preset.id)}）\n"
             "或用 `/api switch` 一次選好。"
         )
 
@@ -909,7 +1119,7 @@ class ChatPipeline:
         await self.repo.save_settings(guild_settings)
         return (
             f"已設定 API base=`{url}`（provider=`{detect_provider(url)}`）。\n"
-            "記得 `/api key` 與 `/api model`（或 `/model`）。"
+            "記得 `/api key` 與 `/api model`。"
         )
 
     async def set_api_key(self, guild_id: int, key_raw: str) -> str:
@@ -991,7 +1201,7 @@ class ChatPipeline:
             tip = (
                 f"已開啟角色沉浸。目前深度=`{depth}`。"
                 if depth != "off"
-                else "已開啟角色沉浸，但目前深度=`off`，尚不會生效。請再用 `/depth` 選 `high` 或 `max` 測試。"
+                else "已開啟角色沉浸，但目前深度=`off`，尚不會生效。請再用 `/api depth` 選 `high` 或 `max` 測試。"
             )
             return tip
         return "已關閉角色沉浸（不再注入官方思考沉浸指令）。"
@@ -1046,7 +1256,7 @@ class ChatPipeline:
             lines.append(
                 f"kobold=`{st.get('kobold_url')}` webui=`{st.get('webui_url')}`"
             )
-        lines.append("手動：`/vram to_sd`（生圖）／`/vram to_llm`（文字）。")
+        lines.append("手動：`/vram switch` 選生圖或文字 LLM。")
         return "\n".join(lines)
 
     async def vram_switch_mode(self, mode: str) -> str:
@@ -1057,7 +1267,7 @@ class ChatPipeline:
         if mode in {"llm", "to_llm", "text", "kobold"}:
             data = await switch_to_llm()
             return self._format_vram_switch("文字 LLM", data)
-        return "用法：`/vram to_sd` 或 `/vram to_llm`。"
+        return "用法：`/vram switch`（生圖 或 文字 LLM）。"
 
     @staticmethod
     def _format_vram_switch(label: str, data: dict) -> str:

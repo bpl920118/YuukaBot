@@ -33,6 +33,7 @@ class Repository:
             await conn.run_sync(Base.metadata.create_all)
             await conn.run_sync(_ensure_guild_settings_llm_columns)
             await conn.run_sync(_ensure_guild_bonds_summary_column)
+            await conn.run_sync(_ensure_guild_bonds_checkin_columns)
 
     @asynccontextmanager
     async def session(self) -> AsyncIterator[AsyncSession]:
@@ -62,6 +63,8 @@ class Repository:
         *,
         affection: int | None = None,
         emotion: str | None = None,
+        checkin_streak: int | None = None,
+        last_checkin_date: str | None = None,
         character_id: str = "yuuka",
     ) -> GuildBond:
         async with self.session() as session:
@@ -78,6 +81,10 @@ class Repository:
                 bond.affection = max(0, min(100, affection))
             if emotion is not None:
                 bond.emotion = emotion
+            if checkin_streak is not None:
+                bond.checkin_streak = max(0, int(checkin_streak))
+            if last_checkin_date is not None:
+                bond.last_checkin_date = (last_checkin_date or "")[:16]
             await session.commit()
             await session.refresh(bond)
             return bond
@@ -446,4 +453,25 @@ def _ensure_guild_bonds_summary_column(sync_conn) -> None:
     if "memory_summary" not in cols:
         sync_conn.execute(
             text("ALTER TABLE guild_bonds ADD COLUMN memory_summary TEXT DEFAULT ''")
+        )
+
+
+def _ensure_guild_bonds_checkin_columns(sync_conn) -> None:
+    from sqlalchemy import inspect, text
+
+    insp = inspect(sync_conn)
+    if "guild_bonds" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("guild_bonds")}
+    if "checkin_streak" not in cols:
+        sync_conn.execute(
+            text(
+                "ALTER TABLE guild_bonds ADD COLUMN checkin_streak INTEGER DEFAULT 0"
+            )
+        )
+    if "last_checkin_date" not in cols:
+        sync_conn.execute(
+            text(
+                "ALTER TABLE guild_bonds ADD COLUMN last_checkin_date VARCHAR(16) DEFAULT ''"
+            )
         )

@@ -21,6 +21,9 @@ class GuildBond(Base):
     character_id: Mapped[str] = mapped_column(String(64), default="yuuka")
     affection: Mapped[int] = mapped_column(Integer, default=0)
     emotion: Mapped[str] = mapped_column(String(32), default="neutral")
+    # Guild-level daily check-in streak (one claim per calendar day).
+    checkin_streak: Mapped[int] = mapped_column(Integer, default=0)
+    last_checkin_date: Mapped[str] = mapped_column(String(16), default="")  # YYYY-MM-DD
     # Rolling summary of turns dropped beyond MEMORY_LIMIT (ST / OpenTavern-style).
     memory_summary: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[datetime] = mapped_column(
@@ -83,7 +86,7 @@ class GuildSetting(Base):
     locked_to_teacher: Mapped[int] = mapped_column(Integer, default=0)  # 0/1
     work_mode: Mapped[int] = mapped_column(Integer, default=0)  # 0=RP, 1=assistant
     extra_layers: Mapped[str] = mapped_column(Text, default="")  # teacher overlay notes
-    # Empty => fall back to .env / config defaults. Teacher-only via /model /depth.
+    # Empty => fall back to .env / config defaults. Teacher-only via /api model|/api depth.
     llm_model: Mapped[str] = mapped_column(String(128), default="")
     llm_depth: Mapped[str] = mapped_column(String(16), default="")  # off|high|max
     # 0/1 — inject DeepSeek V4 role-immersion marker when thinking is on.

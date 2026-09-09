@@ -21,6 +21,21 @@ async def _require_guild(interaction: discord.Interaction) -> int | None:
     return gid
 
 
+async def _parse_message_id(
+    interaction: discord.Interaction, after_message_id: str | None
+) -> int | None | bool:
+    """Return message id, None if unset, or False if invalid (reply already sent)."""
+    if not after_message_id:
+        return None
+    raw = after_message_id.strip()
+    if not raw.isdigit():
+        await interaction.response.send_message(
+            "after_message_id 請填純數字訊息 ID。", ephemeral=True
+        )
+        return False
+    return int(raw)
+
+
 class SlashCog(commands.Cog):
     """Discord slash commands (/) — visible in the server command picker."""
 
@@ -79,89 +94,27 @@ class SlashCog(commands.Cog):
             f"在。延遲約 `{latency_ms}` ms。", ephemeral=True
         )
 
-    # ── teacher: model / depth / api ────────────────────────
-
-    @app_commands.command(name="model", description="同廠商內切換模型（換 Gemini／DeepSeek 請用 /api switch）")
-    @app_commands.describe(
-        choice="依「目前廠商」對應的別名",
-        name="或直接輸入完整模型 id",
-    )
-    @app_commands.choices(
-        choice=[
-            app_commands.Choice(name="flash＝日常快速（依目前廠商）", value="flash"),
-            app_commands.Choice(name="pro＝較強／較貴（依目前廠商）", value="pro"),
-            app_commands.Choice(name="lite＝更省（僅 Gemini）", value="lite"),
-        ]
-    )
-    @owner_only()
-    async def model(
-        self,
-        interaction: discord.Interaction,
-        choice: app_commands.Choice[str] | None = None,
-        name: str | None = None,
-    ) -> None:
-        gid = await _require_guild(interaction)
-        if gid is None:
-            return
-        if choice is None and not (name or "").strip():
-            text = await self.pipeline.describe_llm(gid)
-        else:
-            text = await self.pipeline.set_model(gid, (name or "").strip() or choice.value)
-        await interaction.response.send_message(text, ephemeral=True)
-
-    @app_commands.command(name="depth", description="查看或切換思考深度（僅管理者）")
-    @app_commands.describe(choice="留空則查看目前設定")
-    @app_commands.choices(
-        choice=[
-            app_commands.Choice(name="關（off）", value="off"),
-            app_commands.Choice(name="high", value="high"),
-            app_commands.Choice(name="max", value="max"),
-        ]
-    )
-    @owner_only()
-    async def depth(
-        self,
-        interaction: discord.Interaction,
-        choice: app_commands.Choice[str] | None = None,
-    ) -> None:
-        gid = await _require_guild(interaction)
-        if gid is None:
-            return
-        if choice is None:
-            text = await self.pipeline.describe_llm(gid)
-        else:
-            text = await self.pipeline.set_depth(gid, choice.value)
-        await interaction.response.send_message(text, ephemeral=True)
-
     @app_commands.command(
-        name="immersion",
-        description="開關 DeepSeek 角色沉浸指令（僅管理者；需配合 depth≠off）",
+        name="checkin",
+        description="本伺服器每日簽到（一天第一次由優香回話；重複簽到不打 API）",
     )
-    @app_commands.describe(choice="留空則查看目前設定")
-    @app_commands.choices(
-        choice=[
-            app_commands.Choice(name="開（on）", value="on"),
-            app_commands.Choice(name="關（off）", value="off"),
-        ]
-    )
-    @owner_only()
-    async def immersion(
-        self,
-        interaction: discord.Interaction,
-        choice: app_commands.Choice[str] | None = None,
-    ) -> None:
+    async def checkin(self, interaction: discord.Interaction) -> None:
         gid = await _require_guild(interaction)
         if gid is None:
             return
-        if choice is None:
-            text = await self.pipeline.describe_llm(gid)
-        else:
-            text = await self.pipeline.set_immersion(gid, choice.value == "on")
-        await interaction.response.send_message(text, ephemeral=True)
+        await interaction.response.defer(thinking=True)
+        result = await self.pipeline.handle_checkin(
+            guild_id=gid,
+            user_id=interaction.user.id,
+            display_name=interaction.user.display_name,
+        )
+        await interaction.followup.send(result["reply"])
+
+    # ── teacher: LLM（全部收進 /api）────────────────────────
 
     api = app_commands.Group(
         name="api",
-        description="切換 LLM 廠商／金鑰（僅管理者）· 推薦用 switch",
+        description="LLM 設定（僅管理者）· 日常用 switch",
     )
 
     @api.command(name="help", description="說明：多廠商 .env + Discord 怎麼切")
@@ -170,7 +123,7 @@ class SlashCog(commands.Cog):
         text = await self.pipeline.api_help()
         await interaction.response.send_message(text, ephemeral=True)
 
-    @api.command(name="status", description="查看目前廠商／金鑰來源／模型")
+    @api.command(name="status", description="查看目前廠商／金鑰／模型／深度")
     @owner_only()
     async def api_status(self, interaction: discord.Interaction) -> None:
         gid = await _require_guild(interaction)
@@ -218,27 +171,86 @@ class SlashCog(commands.Cog):
         await interaction.response.send_message(text, ephemeral=True)
 
     @api.command(
-        name="preset",
-        description="只切廠商（用該廠商預設模型）· 更細請用 switch",
+        name="model",
+        description="同廠商換模型（別名或完整 id；留空＝狀態）",
     )
-    @app_commands.describe(choice="廠商")
+    @app_commands.describe(
+        choice="依「目前廠商」對應的別名",
+        name="或直接輸入完整模型 id",
+    )
     @app_commands.choices(
         choice=[
-            app_commands.Choice(name="DeepSeek（預設 V4 Flash）", value="deepseek"),
-            app_commands.Choice(name="Gemini（預設 3.6 Flash）", value="gemini"),
-            app_commands.Choice(name="OpenAI（預設 gpt-4o-mini）", value="openai"),
+            app_commands.Choice(name="flash＝日常快速（依目前廠商）", value="flash"),
+            app_commands.Choice(name="pro＝較強／較貴（依目前廠商）", value="pro"),
+            app_commands.Choice(name="lite＝更省（僅 Gemini）", value="lite"),
         ]
     )
     @owner_only()
-    async def api_preset(
+    async def api_model(
         self,
         interaction: discord.Interaction,
-        choice: app_commands.Choice[str],
+        choice: app_commands.Choice[str] | None = None,
+        name: str | None = None,
     ) -> None:
         gid = await _require_guild(interaction)
         if gid is None:
             return
-        text = await self.pipeline.set_api_preset(gid, choice.value)
+        if choice is None and not (name or "").strip():
+            text = await self.pipeline.describe_llm(gid)
+        else:
+            text = await self.pipeline.set_model(
+                gid, (name or "").strip() or choice.value
+            )
+        await interaction.response.send_message(text, ephemeral=True)
+
+    @api.command(name="depth", description="查看或切換思考深度")
+    @app_commands.describe(choice="留空則查看目前設定")
+    @app_commands.choices(
+        choice=[
+            app_commands.Choice(name="關（off）", value="off"),
+            app_commands.Choice(name="high", value="high"),
+            app_commands.Choice(name="max", value="max"),
+        ]
+    )
+    @owner_only()
+    async def api_depth(
+        self,
+        interaction: discord.Interaction,
+        choice: app_commands.Choice[str] | None = None,
+    ) -> None:
+        gid = await _require_guild(interaction)
+        if gid is None:
+            return
+        if choice is None:
+            text = await self.pipeline.describe_llm(gid)
+        else:
+            text = await self.pipeline.set_depth(gid, choice.value)
+        await interaction.response.send_message(text, ephemeral=True)
+
+    @api.command(
+        name="immersion",
+        description="開關 DeepSeek 角色沉浸（需 depth≠off）",
+    )
+    @app_commands.describe(choice="留空則查看目前設定")
+    @app_commands.choices(
+        choice=[
+            app_commands.Choice(name="開（on）", value="on"),
+            app_commands.Choice(name="關（off）", value="off"),
+        ]
+    )
+    @owner_only()
+    async def api_immersion(
+        self,
+        interaction: discord.Interaction,
+        choice: app_commands.Choice[str] | None = None,
+    ) -> None:
+        gid = await _require_guild(interaction)
+        if gid is None:
+            return
+        if choice is None:
+            text = await self.pipeline.describe_llm(gid)
+        else:
+            text = await self.pipeline.set_immersion(gid, choice.value == "on")
         await interaction.response.send_message(text, ephemeral=True)
 
     @api.command(name="url", description="進階：自訂 API base（OpenAI 相容）")
@@ -261,16 +273,6 @@ class SlashCog(commands.Cog):
         if gid is None:
             return
         text = await self.pipeline.set_api_key(gid, key)
-        await interaction.response.send_message(text, ephemeral=True)
-
-    @api.command(name="model", description="進階：自由輸入模型 id（日常用 /model 或 switch）")
-    @app_commands.describe(name="例如 gemini-3.6-flash / deepseek-v4-flash")
-    @owner_only()
-    async def api_model(self, interaction: discord.Interaction, name: str) -> None:
-        gid = await _require_guild(interaction)
-        if gid is None:
-            return
-        text = await self.pipeline.set_api_model(gid, name)
         await interaction.response.send_message(text, ephemeral=True)
 
     @api.command(name="clear", description="清除伺服器覆寫，改回 .env 的 LLM_PROVIDER")
@@ -388,24 +390,25 @@ class SlashCog(commands.Cog):
         text = await self.pipeline.describe_vram(gid)
         await interaction.followup.send(text, ephemeral=True)
 
-    @vram.command(name="to_sd", description="切到生圖（關 Kobold、開 WebUI）")
+    @vram.command(name="switch", description="切換：生圖 或 文字 LLM")
+    @app_commands.describe(mode="要留給哪邊用 VRAM")
+    @app_commands.choices(
+        mode=[
+            app_commands.Choice(name="生圖（關 Kobold、開 WebUI）", value="sd"),
+            app_commands.Choice(name="文字 LLM（可關 WebUI、開 Kobold）", value="llm"),
+        ]
+    )
     @owner_only()
-    async def vram_to_sd(self, interaction: discord.Interaction) -> None:
+    async def vram_switch(
+        self,
+        interaction: discord.Interaction,
+        mode: app_commands.Choice[str],
+    ) -> None:
         gid = await _require_guild(interaction)
         if gid is None:
             return
         await interaction.response.defer(ephemeral=True)
-        text = await self.pipeline.vram_switch_mode("sd")
-        await interaction.followup.send(text, ephemeral=True)
-
-    @vram.command(name="to_llm", description="切到文字 LLM（可關 WebUI、開 Kobold）")
-    @owner_only()
-    async def vram_to_llm(self, interaction: discord.Interaction) -> None:
-        gid = await _require_guild(interaction)
-        if gid is None:
-            return
-        await interaction.response.defer(ephemeral=True)
-        text = await self.pipeline.vram_switch_mode("llm")
+        text = await self.pipeline.vram_switch_mode(mode.value)
         await interaction.followup.send(text, ephemeral=True)
 
     # ── score（共用好感；對話不顯示）────────────────────────
@@ -414,7 +417,7 @@ class SlashCog(commands.Cog):
         name="score", description="伺服器共用好感度（對話不顯示；用指令查）"
     )
 
-    @score.command(name="show", description="查看本伺服器共用好感與生圖門檻")
+    @score.command(name="show", description="查看本伺服器共用好感、稱號與簽到連簽")
     async def score_show(self, interaction: discord.Interaction) -> None:
         gid = await _require_guild(interaction)
         if gid is None:
@@ -477,16 +480,24 @@ class SlashCog(commands.Cog):
         text = await self.pipeline.clear_layers(gid)
         await interaction.response.send_message(text, ephemeral=True)
 
-    @clear.command(name="channel", description="刪除本頻道訊息（需管理訊息權限）")
+    @clear.command(name="messages", description="刪除本頻道訊息（可限 bot）")
     @app_commands.describe(
+        scope="全部訊息，或只刪機器人自己發的",
         limit="掃描上限（預設 200，最大 200）",
         after_time="從今天該時間起刪，例如 10:55",
         after_message_id="從指定訊息 ID 起刪（含之後）",
     )
+    @app_commands.choices(
+        scope=[
+            app_commands.Choice(name="全部訊息", value="all"),
+            app_commands.Choice(name="只刪 bot", value="bot"),
+        ]
+    )
     @owner_only()
-    async def clear_channel(
+    async def clear_messages(
         self,
         interaction: discord.Interaction,
+        scope: app_commands.Choice[str] | None = None,
         limit: app_commands.Range[int, 1, 200] = 200,
         after_time: str | None = None,
         after_message_id: str | None = None,
@@ -494,59 +505,17 @@ class SlashCog(commands.Cog):
         if interaction.guild is None:
             await interaction.response.send_message("請在伺服器內使用。", ephemeral=True)
             return
-        msg_id: int | None = None
-        if after_message_id:
-            raw = after_message_id.strip()
-            if not raw.isdigit():
-                await interaction.response.send_message(
-                    "after_message_id 請填純數字訊息 ID。", ephemeral=True
-                )
-                return
-            msg_id = int(raw)
-        await interaction.response.defer(ephemeral=True)
-        text = await clear_channel_messages(
-            channel=interaction.channel,
-            bot_user=self.bot.user,
-            guild=interaction.guild,
-            bot_only=False,
-            limit=limit,
-            after_time=after_time,
-            after_message_id=msg_id,
-        )
-        await interaction.followup.send(text, ephemeral=True)
-
-    @clear.command(name="bot", description="只刪本頻道機器人自己發過的訊息")
-    @app_commands.describe(
-        limit="掃描上限（預設 200，最大 200）",
-        after_time="從今天該時間起刪，例如 10:55",
-        after_message_id="從指定訊息 ID 起刪（含之後）",
-    )
-    @owner_only()
-    async def clear_bot(
-        self,
-        interaction: discord.Interaction,
-        limit: app_commands.Range[int, 1, 200] = 200,
-        after_time: str | None = None,
-        after_message_id: str | None = None,
-    ) -> None:
-        if interaction.guild is None:
-            await interaction.response.send_message("請在伺服器內使用。", ephemeral=True)
+        # Default: all messages (matches former /clear channel)
+        scope_value = scope.value if scope is not None else "all"
+        msg_id = await _parse_message_id(interaction, after_message_id)
+        if msg_id is False:
             return
-        msg_id: int | None = None
-        if after_message_id:
-            raw = after_message_id.strip()
-            if not raw.isdigit():
-                await interaction.response.send_message(
-                    "after_message_id 請填純數字訊息 ID。", ephemeral=True
-                )
-                return
-            msg_id = int(raw)
         await interaction.response.defer(ephemeral=True)
         text = await clear_channel_messages(
             channel=interaction.channel,
             bot_user=self.bot.user,
             guild=interaction.guild,
-            bot_only=True,
+            bot_only=scope_value == "bot",
             limit=limit,
             after_time=after_time,
             after_message_id=msg_id,
@@ -555,48 +524,52 @@ class SlashCog(commands.Cog):
 
     # ── teacher: mode / note ────────────────────────────────
 
-    mode = app_commands.Group(name="mode", description="回應模式／人設切換（僅管理者）")
+    mode = app_commands.Group(name="mode", description="回應模式／人設／老師設定（僅管理者）")
 
-    @mode.command(name="lock", description="之後只回應管理者本人")
+    @mode.command(name="lock", description="鎖定：只回應管理者／解除")
+    @app_commands.describe(choice="開＝只回管理者；關＝可回其他人")
+    @app_commands.choices(
+        choice=[
+            app_commands.Choice(name="開（只回管理者）", value="on"),
+            app_commands.Choice(name="關（可回其他人）", value="off"),
+        ]
+    )
     @owner_only()
-    async def mode_lock(self, interaction: discord.Interaction) -> None:
+    async def mode_lock(
+        self,
+        interaction: discord.Interaction,
+        choice: app_commands.Choice[str],
+    ) -> None:
         gid = await _require_guild(interaction)
         if gid is None:
             return
-        text = await self.pipeline.set_locked(gid, True)
+        text = await self.pipeline.set_locked(gid, choice.value == "on")
         await interaction.response.send_message(text, ephemeral=True)
 
-    @mode.command(name="unlock", description="解除鎖定，可回應其他人")
+    @mode.command(name="persona", description="人設：優香／工作模式")
+    @app_commands.describe(choice="yuuka＝人設；work＝關人設")
+    @app_commands.choices(
+        choice=[
+            app_commands.Choice(name="優香人設", value="yuuka"),
+            app_commands.Choice(name="工作模式（關人設）", value="work"),
+        ]
+    )
     @owner_only()
-    async def mode_unlock(self, interaction: discord.Interaction) -> None:
+    async def mode_persona(
+        self,
+        interaction: discord.Interaction,
+        choice: app_commands.Choice[str],
+    ) -> None:
         gid = await _require_guild(interaction)
         if gid is None:
             return
-        text = await self.pipeline.set_locked(gid, False)
+        text = await self.pipeline.set_work_mode(gid, choice.value == "work")
         await interaction.response.send_message(text, ephemeral=True)
 
-    @mode.command(name="work", description="切換為工作模式（關閉人設）")
-    @owner_only()
-    async def mode_work(self, interaction: discord.Interaction) -> None:
-        gid = await _require_guild(interaction)
-        if gid is None:
-            return
-        text = await self.pipeline.set_work_mode(gid, True)
-        await interaction.response.send_message(text, ephemeral=True)
-
-    @mode.command(name="persona", description="恢復優香人設")
-    @owner_only()
-    async def mode_persona(self, interaction: discord.Interaction) -> None:
-        gid = await _require_guild(interaction)
-        if gid is None:
-            return
-        text = await self.pipeline.set_work_mode(gid, False)
-        await interaction.response.send_message(text, ephemeral=True)
-
-    @app_commands.command(name="note", description="叠加一則老師設定到人設（僅管理者）")
+    @mode.command(name="note", description="叠加一則老師設定到人設")
     @app_commands.describe(text="要記下的設定內容")
     @owner_only()
-    async def note(self, interaction: discord.Interaction, text: str) -> None:
+    async def mode_note(self, interaction: discord.Interaction, text: str) -> None:
         gid = await _require_guild(interaction)
         if gid is None:
             return

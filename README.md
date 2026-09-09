@@ -59,26 +59,22 @@ Discord Developer Portal 請開啟 **Message Content Intent**。
 |------|------|
 | `/score threshold` | 設定達到多少分自動生圖（1～100） |
 | `/score set` | 直接設定共用好感 |
-| `/model` | 查看或切換模型（`flash` / `pro`） |
-| `/depth` | 查看或切換深度（`關` / `high` / `max`） |
-| `/image status` | 測試 WebUI 是否連得上 |
-| `/image url` | 設定生圖 API（Tailscale 等） |
-| `/image off` | 關閉本伺服器生圖覆寫 |
-| `/image test` | 強制出一張測試 CG（固定場景） |
-| `/image force` | 依近期對話記憶強制生圖 |
-| `/clear memory` | 清除本伺服器 bot 對話記憶 |
-| `/clear gallery` | 清除 CG 資料庫紀錄 |
-| `/clear layers` | 清除老師叠加設定 |
-| `/clear channel` | 刪本頻道訊息（可填 `limit` / `after_time` / `after_message_id`） |
-| `/clear bot` | 只刪 bot 自己發過的訊息 |
-| `/mode lock` | 之後只回應管理者本人 |
-| `/mode unlock` | 解除鎖定 |
-| `/mode work` | 工作模式（關閉人設） |
-| `/mode persona` | 恢復優香人設 |
-| `/note` | 叠加一則老師設定 |
+| `/api switch` | 一鍵切換廠商＋模型（推薦） |
+| `/api status` / `/api help` / `/api test` | 狀態／說明／連線測試 |
+| `/api model` | 同廠商換模型（`flash`／`pro`／`lite` 或完整 id） |
+| `/api depth` | 思考深度（`關`／`high`／`max`） |
+| `/api immersion` | DeepSeek 角色沉浸開關 |
+| `/api url` · `/api key` · `/api clear` | 進階覆寫／清回 `.env` |
+| `/image status` · `url` · `off` · `test` · `force` | 生圖連線與強制出圖 |
+| `/vram status` · `/vram switch` | 家用 GPU：文字 LLM ↔ 生圖 |
+| `/clear memory` · `gallery` · `layers` | 清記憶／圖庫／老師設定 |
+| `/clear messages` | 刪本頻道訊息（`scope`＝全部或只刪 bot） |
+| `/mode lock` | 只回管理者／解除（`on`／`off`） |
+| `/mode persona` | 優香人設／工作模式 |
+| `/mode note` | 叠加一則老師設定 |
 
 清除頻道訊息時，bot 需要 Discord 權限 **Manage Messages（管理訊息）**。超過 14 天的訊息無法批次刪除。  
-從某則訊息起刪：在 Discord 開啟「開發者模式」→ 右鍵訊息「複製訊息 ID」→ 填入 `/clear channel` 的 `after_message_id`。
+從某則訊息起刪：在 Discord 開啟「開發者模式」→ 右鍵訊息「複製訊息 ID」→ 填入 `/clear messages` 的 `after_message_id`。
 
 ## CG 兩階段
 

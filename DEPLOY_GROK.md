@@ -61,7 +61,7 @@ Confirm log: `Logged in as ...`
 | 要生 CG（達門檻／`/image test`） | 自動 `to_sd`（關 Kobold → 開 WebUI） |
 | 生圖結束 | 自動 `to_llm`（可關 WebUI → 開 Kobold） |
 | Discord 走家用 `/api` 聊天但 Kobold 掛了 | 自動切回文字 LLM |
-| 手動 | `/vram status`、`/vram to_sd`、`/vram to_llm` |
+| 手動 | `/vram status`、`/vram switch` |
 
 日常建議：**聊天用雲端**；CG 才動家裡 GPU。Mode B（家用聊天）再開 Kobold + agent。
 
@@ -70,7 +70,7 @@ Confirm log: `Logged in as ...`
 ```text
 /api status → /api test
 /image url http://100.x:7860 → /image status → /image test
-/vram status →（可選）/vram to_llm 或 /vram to_sd
+/vram status →（可選）/vram switch
 家用模：/api url http://100.x:5001/v1 → /api key local → /api model koboldcpp/Qwen3-8B-Q4_K_M → /api test
 切回雲端：/api clear
 ```

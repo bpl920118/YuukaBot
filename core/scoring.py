@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -238,3 +238,65 @@ class AffectionScorer:
 def crossed_milestones(old: int, new: int, milestones: dict[Any, Any]) -> list[int]:
     keys = sorted(int(k) for k in milestones.keys())
     return [m for m in keys if old < m <= new]
+
+
+def milestone_map(character: dict[Any, Any] | None = None) -> dict[int, dict[str, Any]]:
+    raw = (character or {}).get("milestones") or {}
+    out: dict[int, dict[str, Any]] = {}
+    for key, val in raw.items():
+        try:
+            n = int(key)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(val, dict):
+            out[n] = val
+        else:
+            out[n] = {"title": str(val), "line": ""}
+    return out
+
+
+def current_title(affection: int, milestones: dict[int, dict[str, Any]]) -> str | None:
+    best: str | None = None
+    for threshold in sorted(milestones.keys()):
+        if affection >= threshold:
+            title = str(milestones[threshold].get("title") or "").strip()
+            if title:
+                best = title
+    return best
+
+
+def checkin_delta(streak: int, scoring: dict[Any, Any] | None = None) -> int:
+    cfg = (scoring or {}).get("checkin") or {}
+    base = int(cfg.get("base", 2))
+    bonus_step = int(cfg.get("streak_bonus", 1))
+    cap = int(cfg.get("streak_bonus_cap", 3))
+    # streak 1 => no extra; streak 2 => +1 step, capped
+    extra = min(cap, max(0, streak - 1) * bonus_step)
+    return max(0, base + extra)
+
+
+def daily_checkin_event_key(when: date | None = None) -> str:
+    d = when or date.today()
+    return f"checkin:{d.isoformat()}"
+
+
+def parse_iso_date(raw: str | None) -> date | None:
+    text = (raw or "").strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
+
+def next_checkin_streak(last_date: str | None, streak: int, today: date | None = None) -> int:
+    today = today or date.today()
+    prev = parse_iso_date(last_date)
+    if prev is None:
+        return 1
+    if prev == today:
+        return max(1, int(streak or 1))
+    if prev == today - timedelta(days=1):
+        return max(1, int(streak or 0) + 1)
+    return 1

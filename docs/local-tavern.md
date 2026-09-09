@@ -99,6 +99,6 @@ SD_WEBUI_URL=http://127.0.0.1:7860
 # or Tailscale WebUI URL when bot is on Grok
 ```
 
-Manual Discord: `/vram status` · `/vram to_sd` · `/vram to_llm`
+Manual Discord: `/vram status` · `/vram switch`
 
 Without the agent, bot still tries soft Kobold abort (often not enough on 8GB).

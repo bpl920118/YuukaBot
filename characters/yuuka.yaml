@@ -195,4 +195,27 @@ scoring:
         date: "12-25"
         delta: 4
         keywords: ["聖誕", "聖誕節", "聖誕快樂"]
+  # Guild daily check-in (one claim per day; first claim may call LLM).
+  checkin:
+    base: 2
+    streak_bonus: 1
+    streak_bonus_cap: 3
   cg_threshold_default: 30
+
+# Soft unlock titles by shared affection (not shown in RP chat text).
+milestones:
+  "10":
+    title: "臨時對帳夥伴"
+    line: "……至少你會準時出現。表單還一堆，別以為簽到就能偷懶。"
+  "25":
+    title: "可靠的核銷窗口"
+    line: "連續出現有被記下來。收據記得帶齊，我沒那麼好打發。"
+  "50":
+    title: "半個研討會會計"
+    line: "……好吧，你算半個自己人了。預算別亂批，我會盯著。"
+  "75":
+    title: "優香認定的可靠老師"
+    line: "數據顯示你很穩定。少讓我操心——當然，該操心的帳我還是會管。"
+  "100":
+    title: "帳本上的固定項"
+    line: "滿格了。別得意，之後請假也要先跟我報備。"
