@@ -99,12 +99,13 @@ YuukaBot 有新 commit。請到 /workspace/YuukaBot：
 3. 編輯 .env（保留密鑰，對齊 .env.example 新增欄位；勿把密鑰貼回對話）：
    - LLM_TEMPERATURE=0.95 / HOME_LLM_TEMPERATURE=0.9 / MOMOTALK_TEMPERATURE=0.95
    - LORE_SCAN_DEPTH=6 / LORE_MAX_CHARS=900 / MEMORY_SUMMARY_MAX_CHARS=400
+   - GEMINI_API_KEY=（建議填：主路空回 ≥2 次會熱備切 Gemini，不改 /api switch）
    - HOME_VRAM_AGENT_URL=（有 Tailscale+agent 再填 http://100.x:5010；否則留空）
    - HOME_VRAM_AGENT_TOKEN=yuuka-local
    - HOME_VRAM_RELOAD_LLM=true
    - HOME_VRAM_ENSURE_LLM_ON_CHAT=true
    - SD_WEBUI_URL=（要 CG 再填 http://100.x:7860；否則留空）
-4. 重啟 bot
+4. 重啟 bot（空回退避／Gemini 熱備在 clients/llm.py，需重啟才生效）
 5. 確認 Logged in；Discord /api status → /api test
 6. 回報結果（不要回報完整 API key）
 ```
