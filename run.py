@@ -20,20 +20,37 @@ def run() -> None:
 
     bot = YuukaBot()
 
+    async def _sync_guild_commands(guild: discord.Guild) -> int:
+        """Publish the full slash tree to one guild (appears immediately)."""
+        bot.tree.copy_global_to(guild=guild)
+        synced = await bot.tree.sync(guild=guild)
+        return len(synced)
+
     @bot.event
     async def on_ready() -> None:
         print(f"Logged in as {bot.user} ({bot.user and bot.user.id})")
         try:
-            # Guild + global double-sync makes every slash appear twice in the menu.
-            # Clear per-guild command sets, then keep a single global sync.
+            # Global-only sync can take up to ~1h for new commands to show.
+            # Clear remote globals (avoids duplicate menu entries), then sync
+            # each guild so /play etc. appear immediately.
+            if bot.application_id is not None:
+                await bot.http.bulk_upsert_global_commands(bot.application_id, [])
+                print("Cleared global app commands (guild sync only)")
             for guild in bot.guilds:
-                bot.tree.clear_commands(guild=guild)
-                cleared = await bot.tree.sync(guild=guild)
-                print(f"Cleared guild commands → {guild.id} (now {len(cleared)})")
-            synced = await bot.tree.sync()
-            print(f"Synced {len(synced)} global app commands")
+                bot.tree.copy_global_to(guild=guild)
+                synced = await bot.tree.sync(guild=guild)
+                names = ", ".join(sorted(c.name for c in synced))
+                print(f"Synced {len(synced)} guild commands → {guild.id}: {names}")
         except Exception as exc:
             print(f"Command sync failed: {exc}")
+
+    @bot.event
+    async def on_guild_join(guild: discord.Guild) -> None:
+        try:
+            n = await _sync_guild_commands(guild)
+            print(f"Synced {n} commands for new guild {guild.id}")
+        except Exception as exc:
+            print(f"Guild join command sync failed: {exc}")
 
     @bot.event
     async def on_message(message: discord.Message) -> None:
