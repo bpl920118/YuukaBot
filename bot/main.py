@@ -33,6 +33,7 @@ class YuukaBot(commands.Bot):
     async def setup_hook(self) -> None:
         await self.repo.init()
         await self.load_extension("bot.cogs.slash")
+        await self.load_extension("bot.cogs.music")
 
 
 def strip_mentions(message: discord.Message, bot_user: discord.ClientUser) -> str:
