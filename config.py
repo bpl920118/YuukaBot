@@ -94,25 +94,27 @@ class Settings(BaseSettings):
     # --- Fanart auto-forward (optional) ---
     # Set FANART_CHANNEL_ID to enable; leave 0 to disable the loop.
     fanart_channel_id: int = 0
-    # danbooru (default, works on cloud VMs) | pixiv
-    fanart_source: str = "danbooru"
-    # Danbooru: second tag only (anon limit ≈2). Keep rating:g to block 18+.
+    # danbooru | safebooru | gelbooru | all | pixiv  (comma list OK)
+    fanart_source: str = "danbooru,safebooru,gelbooru"
+    # Danbooru/Gelbooru rating gate. Keep rating:g to block 18+.
     fanart_danbooru_rating: str = "rating:g"
-    # Comma-separated copyrights; bot rotates one game per poll (no western OC).
-    # Empty => built-in East-Asian gacha list in bot.fanart.danbooru.
+    # Comma-separated copyrights (shared across boorus). Empty => built-in list.
     fanart_danbooru_copyrights: str = (
         "blue_archive,arknights,genshin_impact,honkai:_star_rail,"
         "zenless_zone_zero,wuthering_waves,honkai_impact_3rd,azur_lane,"
         "fate/grand_order,goddess_of_victory:_nikke,girls'_frontline,"
-        "umamusume,princess_connect!,reverse:1999"
+        "girls'_frontline_2:_exilium,umamusume,princess_connect!,"
+        "reverse:1999,mahjong_soul,project_sekai,idolmaster"
     )
-    # Client-side quality gate (Danbooru score). Newest posts score low;
-    # we search order:score then keep rating:g + score >= this.
+    # Client-side quality gate (score).
     fanart_danbooru_min_score: int = 40
-    # Extra exclude tags (furry / non-human / low quality). Empty => defaults.
+    # Extra exclude tags. Empty => defaults (furry/anthro/…).
     fanart_danbooru_exclude_tags: str = ""
-    # Legacy free-form tags (unused when copyrights list is set).
+    # Legacy free-form Danbooru tags (optional override).
     fanart_danbooru_tags: str = ""
+    # Gelbooru requires account API credentials (Options → API Access).
+    fanart_gelbooru_api_key: str = ""
+    fanart_gelbooru_user_id: str = ""
     fanart_pixiv_tag: str = "早瀬ユウカ"
     # Pixiv search mode for direct AJAX: safe | all | r18
     fanart_pixiv_mode: str = "safe"

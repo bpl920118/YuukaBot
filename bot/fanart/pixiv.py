@@ -9,6 +9,8 @@ from urllib.parse import quote
 
 import httpx
 
+from bot.fanart.common import guess_media_ext
+
 log = logging.getLogger("yuuka.fanart.pixiv")
 
 _UA = (
@@ -162,15 +164,7 @@ class PixivClient:
             except Exception as exc:
                 log.warning("pixiv image download failed: %s", exc)
                 return None
-        ctype = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
-        ext = ".jpg"
-        if "png" in ctype or image_url.lower().endswith(".png"):
-            ext = ".png"
-        elif "webp" in ctype:
-            ext = ".webp"
-        elif "gif" in ctype:
-            ext = ".gif"
-        return resp.content, ext
+        return resp.content, guess_media_ext(image_url, resp.headers.get("content-type") or "")
 
 
 def thumb_to_master(thumb_url: str) -> str:

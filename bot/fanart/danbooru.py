@@ -1,71 +1,30 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 
 import httpx
+
+from bot.fanart.common import (
+    DEFAULT_COPYRIGHTS,
+    DEFAULT_EXCLUDE_TAGS,
+    BooruPost,
+    guess_media_ext,
+    parse_csv_tags,
+    passes_quality,
+    pick_copyrights,
+)
 
 log = logging.getLogger("yuuka.fanart.danbooru")
 
 _UA = "YuukaBot/1.0 (Discord fanart; https://github.com/local/YuukaBot)"
 _BASE = "https://danbooru.donmai.us"
 
-# East-Asian gacha / anime-game copyrights only (no western original).
-DEFAULT_COPYRIGHTS: tuple[str, ...] = (
-    "blue_archive",
-    "arknights",
-    "genshin_impact",
-    "honkai:_star_rail",
-    "zenless_zone_zero",
-    "wuthering_waves",
-    "honkai_impact_3rd",
-    "azur_lane",
-    "fate/grand_order",
-    "goddess_of_victory:_nikke",
-    "girls'_frontline",
-    "umamusume",
-    "princess_connect!",
-    "reverse:1999",
-)
-
-# Drop furry / non-human western flavours even if mis-tagged under a game.
-# Intentionally NOT excluding robot/mecha/monster_girl (common in AK / Nikke / AL).
-DEFAULT_EXCLUDE_TAGS: tuple[str, ...] = (
-    "furry",
-    "anthro",
-    "feral",
-    "non-human",
-    "animalization",
-    "kemono",
-    "comic",
-    "animated",
-    "lowres",
-    "sketch",
-    "ai-generated",
-)
-
-
-@dataclass(frozen=True)
-class DanbooruPost:
-    post_id: str
-    title: str
-    author: str
-    page_url: str
-    image_url: str
-    score: int
-    rating: str
-    source: str
-    copyrights: tuple[str, ...]
-    tags: frozenset[str]
+# Back-compat aliases
+DanbooruPost = BooruPost
 
 
 class DanbooruClient:
-    """
-    Official Danbooru posts.json.
-
-    Anonymous searches allow ~2 tags, so we query one copyright + rating:g,
-    then filter score / exclude-tags in Python.
-    """
+    """Official Danbooru posts.json (anon ≈2 tags)."""
 
     def __init__(self, timeout: float = 30.0) -> None:
         self._timeout = timeout
@@ -76,7 +35,7 @@ class DanbooruClient:
         *,
         limit: int = 40,
         page: int = 1,
-    ) -> list[DanbooruPost]:
+    ) -> list[BooruPost]:
         tags = (tags or "").strip()
         if not tags:
             return []
@@ -98,7 +57,7 @@ class DanbooruClient:
         if not isinstance(rows, list):
             log.warning("danbooru unexpected payload type: %s", type(rows))
             return []
-        out: list[DanbooruPost] = []
+        out: list[BooruPost] = []
         for row in rows:
             item = _parse_row(row)
             if item is not None:
@@ -117,83 +76,47 @@ class DanbooruClient:
             except Exception as exc:
                 log.warning("danbooru image download failed: %s", exc)
                 return None
-        ctype = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
-        ext = ".jpg"
-        lower = image_url.lower()
-        if "png" in ctype or lower.endswith(".png"):
-            ext = ".png"
-        elif "webp" in ctype or lower.endswith(".webp"):
-            ext = ".webp"
-        elif "gif" in ctype or lower.endswith(".gif"):
-            ext = ".gif"
-        return resp.content, ext
-
-
-def parse_csv_tags(raw: str, fallback: tuple[str, ...] = ()) -> tuple[str, ...]:
-    parts = [p.strip() for p in (raw or "").replace("\n", ",").split(",")]
-    cleaned = tuple(p for p in parts if p)
-    return cleaned or fallback
+        ctype = resp.headers.get("content-type") or ""
+        return resp.content, guess_media_ext(image_url, ctype)
 
 
 def build_search_tags(copyright: str = "", rating_tag: str = "rating:g") -> str:
-    """
-    Anonymous Danbooru allows ~2 tags.
-
-    Default query is ``rating:g order:score`` (safe + popular). Copyright
-    filtering happens in Python against the allowlist — top global score is
-    mostly explicit, so rating must stay in the API query.
-    """
     rating_tag = (rating_tag or "rating:g").strip() or "rating:g"
     copyright = (copyright or "").strip()
-    # Per-game mode (used when rotating): still rating-safe; score gated in Python.
     if copyright:
         return f"{copyright} {rating_tag}"
     return f"{rating_tag} order:score"
 
 
-def passes_quality(
-    post: DanbooruPost,
-    *,
-    min_score: int,
-    allowed_copyrights: frozenset[str],
-    exclude_tags: frozenset[str],
-    allowed_ratings: frozenset[str] | None = None,
-) -> bool:
-    """Client-side gate: safe rating, game whitelist, score, no non-human junk."""
-    ratings = allowed_ratings or frozenset({"g"})
-    if post.rating not in ratings:
-        return False
-    if post.score < int(min_score):
-        return False
-    if allowed_copyrights and not (allowed_copyrights & set(post.copyrights)):
-        return False
-    if exclude_tags & post.tags:
-        return False
-    return True
-
-
-def _parse_row(row: dict) -> DanbooruPost | None:
+def _parse_row(row: dict) -> BooruPost | None:
     if not isinstance(row, dict):
         return None
     post_id = str(row.get("id") or "").strip()
     if not post_id:
         return None
-    image = (
-        str(row.get("large_file_url") or "").strip()
-        or str(row.get("file_url") or "").strip()
-        or str(row.get("preview_file_url") or "").strip()
-    )
+    file_ext = str(row.get("file_ext") or "").strip().lower()
+    # Prefer original for video; large/sample may be a still preview.
+    if file_ext in {"webm", "mp4", "mov"}:
+        image = (
+            str(row.get("file_url") or "").strip()
+            or str(row.get("large_file_url") or "").strip()
+            or str(row.get("preview_file_url") or "").strip()
+        )
+    else:
+        image = (
+            str(row.get("large_file_url") or "").strip()
+            or str(row.get("file_url") or "").strip()
+            or str(row.get("preview_file_url") or "").strip()
+        )
     if not image:
         return None
     if image.startswith("//"):
         image = "https:" + image
 
-    all_tags = frozenset(
-        t for t in str(row.get("tag_string") or "").split() if t
-    )
-    copyrights = tuple(
-        t for t in str(row.get("tag_string_copyright") or "").split() if t
-    )
+    all_tags = frozenset(t for t in str(row.get("tag_string") or "").split() if t)
+    copyrights = tuple(t for t in str(row.get("tag_string_copyright") or "").split() if t)
+    if not copyrights:
+        copyrights = pick_copyrights(all_tags, frozenset(DEFAULT_COPYRIGHTS))
     artist = str(row.get("tag_string_artist") or "").strip() or "unknown"
     artist = artist.split()[0] if artist else "unknown"
     char_tags = [
@@ -206,9 +129,11 @@ def _parse_row(row: dict) -> DanbooruPost | None:
         score = int(row.get("score") or 0)
     except (TypeError, ValueError):
         score = 0
+    # Danbooru letters: g/s/q/e — keep as-is (do not map "s" via safebooru path).
     rating = str(row.get("rating") or "").strip().lower() or "?"
     source = str(row.get("source") or "").strip()
-    return DanbooruPost(
+    return BooruPost(
+        source_name="danbooru",
         post_id=post_id,
         title=title[:200],
         author=artist[:100],
@@ -216,7 +141,19 @@ def _parse_row(row: dict) -> DanbooruPost | None:
         image_url=image,
         score=score,
         rating=rating,
-        source=source,
+        origin=source,
         copyrights=copyrights,
         tags=all_tags,
     )
+
+
+__all__ = [
+    "DEFAULT_COPYRIGHTS",
+    "DEFAULT_EXCLUDE_TAGS",
+    "BooruPost",
+    "DanbooruClient",
+    "DanbooruPost",
+    "build_search_tags",
+    "parse_csv_tags",
+    "passes_quality",
+]
