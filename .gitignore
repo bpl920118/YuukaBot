@@ -32,3 +32,8 @@ Desktop.ini
 *.swp
 .idea/
 .vscode/
+
+# Local runtime (do not commit)
+yuuka.log
+yuuka.pid
+storage/watch/
