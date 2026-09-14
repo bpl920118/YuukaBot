@@ -222,6 +222,9 @@ class MusicManager:
             self._players[guild_id] = player
         return player
 
+    def peek(self, guild_id: int) -> GuildPlayer | None:
+        return self._players.get(guild_id)
+
     async def teardown(self, guild_id: int) -> None:
         player = self._players.pop(guild_id, None)
         if player:

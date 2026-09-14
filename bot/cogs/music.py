@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import asyncio
+
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 from bot.music.player import MusicManager, Track, format_duration
 from bot.music.ytdlp import PLAYLIST_LIMIT, ResolveError, resolve_query
+
+# Leave shortly after the last human leaves (avoids flap on channel hop).
+ALONE_LEAVE_SECONDS = 30
 
 
 def _voice_channel(
@@ -19,18 +24,89 @@ def _voice_channel(
     return state.channel
 
 
+def _human_members(
+    channel: discord.VoiceChannel | discord.StageChannel,
+) -> int:
+    return sum(1 for m in channel.members if not m.bot)
+
+
 class MusicCog(commands.Cog):
     """Voice music playback (YouTube / YouTube Music)."""
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.manager = MusicManager()
+        self._alone_tasks: dict[int, asyncio.Task[None]] = {}
 
     def _player(self, guild_id: int):
         return self.manager.get(guild_id)
 
     async def cog_unload(self) -> None:
+        for task in self._alone_tasks.values():
+            task.cancel()
+        self._alone_tasks.clear()
         await self.manager.teardown_all()
+
+    def _cancel_alone_leave(self, guild_id: int) -> None:
+        task = self._alone_tasks.pop(guild_id, None)
+        if task and not task.done():
+            task.cancel()
+
+    def _schedule_alone_leave(self, guild_id: int) -> None:
+        self._cancel_alone_leave(guild_id)
+        self._alone_tasks[guild_id] = asyncio.create_task(
+            self._alone_leave_after_delay(guild_id)
+        )
+
+    async def _alone_leave_after_delay(self, guild_id: int) -> None:
+        try:
+            await asyncio.sleep(ALONE_LEAVE_SECONDS)
+        except asyncio.CancelledError:
+            return
+
+        player = self.manager.peek(guild_id)
+        if player is None or not player.voice or not player.voice.is_connected():
+            return
+        channel = player.voice.channel
+        if channel is None or _human_members(channel) > 0:
+            return
+
+        text = player.text_channel
+        await player.disconnect()
+        self._alone_tasks.pop(guild_id, None)
+        if text is not None:
+            try:
+                await text.send("語音頻道沒人了，我先離開。")
+            except discord.HTTPException:
+                pass
+
+    @commands.Cog.listener()
+    async def on_voice_state_update(
+        self,
+        member: discord.Member,
+        before: discord.VoiceState,
+        after: discord.VoiceState,
+    ) -> None:
+        guild = member.guild
+        player = self.manager.peek(guild.id)
+        if player is None or not player.voice or not player.voice.is_connected():
+            return
+
+        bot_channel = player.voice.channel
+        if bot_channel is None:
+            return
+
+        # Only care about joins/leaves that affect the bot's channel.
+        touched = {before.channel, after.channel}
+        if bot_channel not in touched and member.id != self.bot.user_id:
+            # Still re-check if someone left bot channel (before.channel == bot)
+            if before.channel != bot_channel and after.channel != bot_channel:
+                return
+
+        if _human_members(bot_channel) == 0:
+            self._schedule_alone_leave(guild.id)
+        else:
+            self._cancel_alone_leave(guild.id)
 
     @app_commands.command(
         name="play",
@@ -69,6 +145,7 @@ class MusicCog(commands.Cog):
 
         player = self._player(interaction.guild.id)
         player.text_channel = interaction.channel
+        self._cancel_alone_leave(interaction.guild.id)
 
         try:
             await player.connect(channel)
