@@ -59,6 +59,19 @@ class GalleryItem(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class FanartSentPost(Base):
+    """Dedup for auto-forwarded fanart (Pixiv illust id, etc.)."""
+
+    __tablename__ = "fanart_sent_posts"
+    __table_args__ = (UniqueConstraint("source", "post_id", name="uq_fanart_source_post"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(32), default="pixiv", index=True)
+    post_id: Mapped[str] = mapped_column(String(64), index=True)
+    title: Mapped[str] = mapped_column(String(256), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class ScoreEvent(Base):
     """Audit log for affection deltas (chat / work / calendar / dislike / llm)."""
 

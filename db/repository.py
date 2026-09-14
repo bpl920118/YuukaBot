@@ -8,7 +8,15 @@ from sqlalchemy import Select, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from config import get_settings
-from db.models import Base, GalleryItem, GuildBond, GuildSetting, Message, ScoreEvent
+from db.models import (
+    Base,
+    FanartSentPost,
+    GalleryItem,
+    GuildBond,
+    GuildSetting,
+    Message,
+    ScoreEvent,
+)
 
 
 def trailing_orphan_user_ids(rows_newest_first: list[tuple[int, str]]) -> list[int]:
@@ -323,6 +331,37 @@ class Repository:
                 )
             )
             return row is not None
+
+    async def fanart_was_sent(self, source: str, post_id: str) -> bool:
+        async with self.session() as session:
+            row = await session.scalar(
+                select(FanartSentPost.id).where(
+                    FanartSentPost.source == source,
+                    FanartSentPost.post_id == post_id,
+                )
+            )
+            return row is not None
+
+    async def fanart_mark_sent(
+        self, source: str, post_id: str, title: str = ""
+    ) -> bool:
+        """Insert dedup row. Returns True if newly inserted, False if already present."""
+        if await self.fanart_was_sent(source, post_id):
+            return False
+        async with self.session() as session:
+            session.add(
+                FanartSentPost(
+                    source=source,
+                    post_id=post_id,
+                    title=(title or "")[:256],
+                )
+            )
+            try:
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                return False
+            return True
 
     async def add_gallery(
         self,
