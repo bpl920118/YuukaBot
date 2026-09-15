@@ -32,7 +32,7 @@ def run() -> None:
         try:
             # Global-only sync can take up to ~1h for new commands to show.
             # Clear remote globals (avoids duplicate menu entries), then sync
-            # each guild so /play etc. appear immediately.
+            # each guild so /music etc. appear immediately.
             if bot.application_id is not None:
                 await bot.http.bulk_upsert_global_commands(bot.application_id, [])
                 print("Cleared global app commands (guild sync only)")

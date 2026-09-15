@@ -8,36 +8,11 @@ from discord.ext import commands
 
 from bot.channel_clear import clear_channel_messages
 from bot.checks import owner_only
+from bot.cogs._helpers import OwnerErrorMixin, parse_message_id, require_guild
 
 
-def _guild_id(interaction: discord.Interaction) -> int | None:
-    return interaction.guild.id if interaction.guild else None
-
-
-async def _require_guild(interaction: discord.Interaction) -> int | None:
-    gid = _guild_id(interaction)
-    if gid is None:
-        await interaction.response.send_message("請在伺服器內使用。", ephemeral=True)
-    return gid
-
-
-async def _parse_message_id(
-    interaction: discord.Interaction, after_message_id: str | None
-) -> int | None | bool:
-    """Return message id, None if unset, or False if invalid (reply already sent)."""
-    if not after_message_id:
-        return None
-    raw = after_message_id.strip()
-    if not raw.isdigit():
-        await interaction.response.send_message(
-            "after_message_id 請填純數字訊息 ID。", ephemeral=True
-        )
-        return False
-    return int(raw)
-
-
-class SlashCog(commands.Cog):
-    """Discord slash commands (/) — visible in the server command picker."""
+class AdminCog(OwnerErrorMixin, commands.Cog):
+    """管理者指令：LLM／生圖／VRAM／清除／人設模式。"""
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -46,71 +21,7 @@ class SlashCog(commands.Cog):
     def pipeline(self):
         return self.bot.pipeline  # type: ignore[attr-defined]
 
-    @property
-    def settings(self):
-        return self.bot.settings  # type: ignore[attr-defined]
-
-    @property
-    def repo(self):
-        return self.bot.repo  # type: ignore[attr-defined]
-
-    # ── public ──────────────────────────────────────────────
-
-    @app_commands.command(name="gallery", description="查看本伺服器最近的 CG")
-    async def gallery(self, interaction: discord.Interaction) -> None:
-        gid = await _require_guild(interaction)
-        if gid is None:
-            return
-        items = await self.repo.recent_gallery(
-            gid,
-            limit=3,
-            character_id=self.settings.default_character_id,
-        )
-        if not items:
-            await interaction.response.send_message("還沒有收藏 CG。", ephemeral=True)
-            return
-        files = []
-        lines = []
-        for i, item in enumerate(items, 1):
-            lines.append(f"{i}. tier=`{item.tier}` emotion=`{item.emotion}`")
-            path = Path(item.path)
-            if path.exists() and path.suffix.lower() in {
-                ".png",
-                ".jpg",
-                ".jpeg",
-                ".webp",
-                ".gif",
-            }:
-                files.append(discord.File(path, filename=path.name))
-        await interaction.response.send_message(
-            "本伺服器最近 CG：\n" + "\n".join(lines),
-            files=files[:3],
-        )
-
-    @app_commands.command(name="ping", description="測試機器人是否在線")
-    async def ping(self, interaction: discord.Interaction) -> None:
-        latency_ms = round(self.bot.latency * 1000)
-        await interaction.response.send_message(
-            f"在。延遲約 `{latency_ms}` ms。", ephemeral=True
-        )
-
-    @app_commands.command(
-        name="checkin",
-        description="本伺服器每日簽到（一天第一次由優香回話；重複簽到不打 API）",
-    )
-    async def checkin(self, interaction: discord.Interaction) -> None:
-        gid = await _require_guild(interaction)
-        if gid is None:
-            return
-        await interaction.response.defer(thinking=True)
-        result = await self.pipeline.handle_checkin(
-            guild_id=gid,
-            user_id=interaction.user.id,
-            display_name=interaction.user.display_name,
-        )
-        await interaction.followup.send(result["reply"])
-
-    # ── teacher: LLM（全部收進 /api）────────────────────────
+    # ── /api ───────────────────────────────────────────────
 
     api = app_commands.Group(
         name="api",
@@ -126,7 +37,7 @@ class SlashCog(commands.Cog):
     @api.command(name="status", description="查看目前廠商／金鑰／模型／深度")
     @owner_only()
     async def api_status(self, interaction: discord.Interaction) -> None:
-        gid = await _require_guild(interaction)
+        gid = await require_guild(interaction)
         if gid is None:
             return
         text = await self.pipeline.describe_llm(gid)
@@ -164,7 +75,7 @@ class SlashCog(commands.Cog):
         interaction: discord.Interaction,
         choice: app_commands.Choice[str],
     ) -> None:
-        gid = await _require_guild(interaction)
+        gid = await require_guild(interaction)
         if gid is None:
             return
         text = await self.pipeline.set_api_switch(gid, choice.value)
@@ -192,7 +103,7 @@ class SlashCog(commands.Cog):
         choice: app_commands.Choice[str] | None = None,
         name: str | None = None,
     ) -> None:
-        gid = await _require_guild(interaction)
+        gid = await require_guild(interaction)
         if gid is None:
             return
         if choice is None and not (name or "").strip():
@@ -218,7 +129,7 @@ class SlashCog(commands.Cog):
         interaction: discord.Interaction,
         choice: app_commands.Choice[str] | None = None,
     ) -> None:
-        gid = await _require_guild(interaction)
+        gid = await require_guild(interaction)
         if gid is None:
             return
         if choice is None:
@@ -244,7 +155,7 @@ class SlashCog(commands.Cog):
         interaction: discord.Interaction,
         choice: app_commands.Choice[str] | None = None,
     ) -> None:
-        gid = await _require_guild(interaction)
+        gid = await require_guild(interaction)
         if gid is None:
             return
         if choice is None:
@@ -259,7 +170,7 @@ class SlashCog(commands.Cog):
     )
     @owner_only()
     async def api_url(self, interaction: discord.Interaction, url: str) -> None:
-        gid = await _require_guild(interaction)
+        gid = await require_guild(interaction)
         if gid is None:
             return
         text = await self.pipeline.set_api_url(gid, url)
@@ -269,7 +180,7 @@ class SlashCog(commands.Cog):
     @app_commands.describe(key="廠商 API key（勿在公開頻道貼）")
     @owner_only()
     async def api_key(self, interaction: discord.Interaction, key: str) -> None:
-        gid = await _require_guild(interaction)
+        gid = await require_guild(interaction)
         if gid is None:
             return
         text = await self.pipeline.set_api_key(gid, key)
@@ -278,7 +189,7 @@ class SlashCog(commands.Cog):
     @api.command(name="clear", description="清除伺服器覆寫，改回 .env 的 LLM_PROVIDER")
     @owner_only()
     async def api_clear(self, interaction: discord.Interaction) -> None:
-        gid = await _require_guild(interaction)
+        gid = await require_guild(interaction)
         if gid is None:
             return
         text = await self.pipeline.clear_api_override(gid)
@@ -287,21 +198,21 @@ class SlashCog(commands.Cog):
     @api.command(name="test", description="對目前 API 打一則最短測試")
     @owner_only()
     async def api_test(self, interaction: discord.Interaction) -> None:
-        gid = await _require_guild(interaction)
+        gid = await require_guild(interaction)
         if gid is None:
             return
         await interaction.response.defer(ephemeral=True)
         text = await self.pipeline.test_api(gid)
         await interaction.followup.send(text, ephemeral=True)
 
-    # ── teacher: image group ────────────────────────────────
+    # ── /image ─────────────────────────────────────────────
 
     image = app_commands.Group(name="image", description="生圖設定（僅管理者）")
 
     @image.command(name="status", description="查看生圖連線狀態")
     @owner_only()
     async def image_status(self, interaction: discord.Interaction) -> None:
-        gid = await _require_guild(interaction)
+        gid = await require_guild(interaction)
         if gid is None:
             return
         text = await self.pipeline.describe_image(gid)
@@ -311,7 +222,7 @@ class SlashCog(commands.Cog):
     @app_commands.describe(url="例如 http://100.x.y.z:7860")
     @owner_only()
     async def image_url(self, interaction: discord.Interaction, url: str) -> None:
-        gid = await _require_guild(interaction)
+        gid = await require_guild(interaction)
         if gid is None:
             return
         text = await self.pipeline.set_image_url(gid, url)
@@ -320,7 +231,7 @@ class SlashCog(commands.Cog):
     @image.command(name="off", description="關閉本伺服器生圖覆寫")
     @owner_only()
     async def image_off(self, interaction: discord.Interaction) -> None:
-        gid = await _require_guild(interaction)
+        gid = await require_guild(interaction)
         if gid is None:
             return
         text = await self.pipeline.disable_image(gid)
@@ -329,24 +240,12 @@ class SlashCog(commands.Cog):
     @image.command(name="test", description="強制出一張測試 CG（固定場景；頻道公開）")
     @owner_only()
     async def image_test(self, interaction: discord.Interaction) -> None:
-        gid = await _require_guild(interaction)
+        gid = await require_guild(interaction)
         if gid is None:
             return
         await interaction.response.defer(ephemeral=False)
         result = await self.pipeline.test_image(gid, interaction.user.id)
-        files = []
-        image_path = result.get("image_path")
-        if image_path:
-            path = Path(image_path)
-            if path.exists() and path.suffix.lower() in {
-                ".png",
-                ".jpg",
-                ".jpeg",
-                ".webp",
-                ".gif",
-            }:
-                files.append(discord.File(path, filename=path.name))
-        await interaction.followup.send(result["reply"], files=files)
+        await self._send_image_result(interaction, result)
 
     @image.command(
         name="force",
@@ -354,11 +253,16 @@ class SlashCog(commands.Cog):
     )
     @owner_only()
     async def image_force(self, interaction: discord.Interaction) -> None:
-        gid = await _require_guild(interaction)
+        gid = await require_guild(interaction)
         if gid is None:
             return
         await interaction.response.defer(ephemeral=False)
         result = await self.pipeline.force_cg_from_memory(gid, interaction.user.id)
+        await self._send_image_result(interaction, result)
+
+    async def _send_image_result(
+        self, interaction: discord.Interaction, result: dict
+    ) -> None:
         files = []
         image_path = result.get("image_path")
         if image_path:
@@ -373,7 +277,7 @@ class SlashCog(commands.Cog):
                 files.append(discord.File(path, filename=path.name))
         await interaction.followup.send(result["reply"], files=files)
 
-    # ── teacher: vram group（文字 LLM ↔ 生圖同卡切換）────────
+    # ── /vram ──────────────────────────────────────────────
 
     vram = app_commands.Group(
         name="vram",
@@ -383,7 +287,7 @@ class SlashCog(commands.Cog):
     @vram.command(name="status", description="查看 VRAM agent／Kobold／WebUI 狀態")
     @owner_only()
     async def vram_status(self, interaction: discord.Interaction) -> None:
-        gid = await _require_guild(interaction)
+        gid = await require_guild(interaction)
         if gid is None:
             return
         await interaction.response.defer(ephemeral=True)
@@ -404,59 +308,23 @@ class SlashCog(commands.Cog):
         interaction: discord.Interaction,
         mode: app_commands.Choice[str],
     ) -> None:
-        gid = await _require_guild(interaction)
+        gid = await require_guild(interaction)
         if gid is None:
             return
         await interaction.response.defer(ephemeral=True)
         text = await self.pipeline.vram_switch_mode(mode.value)
         await interaction.followup.send(text, ephemeral=True)
 
-    # ── score（共用好感；對話不顯示）────────────────────────
+    # ── /clear ─────────────────────────────────────────────
 
-    score = app_commands.Group(
-        name="score", description="伺服器共用好感度（對話不顯示；用指令查）"
+    clear = app_commands.Group(
+        name="clear", description="清除記憶／訊息／圖庫（僅管理者）"
     )
-
-    @score.command(name="show", description="查看本伺服器共用好感、稱號與簽到連簽")
-    async def score_show(self, interaction: discord.Interaction) -> None:
-        gid = await _require_guild(interaction)
-        if gid is None:
-            return
-        text = await self.pipeline.describe_score(gid)
-        await interaction.response.send_message(text, ephemeral=True)
-
-    @score.command(name="threshold", description="設定達到多少分自動生圖（僅管理者）")
-    @app_commands.describe(value="1～100，達到後出圖並扣除等量分數")
-    @owner_only()
-    async def score_threshold(
-        self, interaction: discord.Interaction, value: app_commands.Range[int, 1, 100]
-    ) -> None:
-        gid = await _require_guild(interaction)
-        if gid is None:
-            return
-        text = await self.pipeline.set_score_threshold(gid, value)
-        await interaction.response.send_message(text, ephemeral=True)
-
-    @score.command(name="set", description="直接設定共用好感數值（僅管理者）")
-    @app_commands.describe(value="0～100")
-    @owner_only()
-    async def score_set(
-        self, interaction: discord.Interaction, value: app_commands.Range[int, 0, 100]
-    ) -> None:
-        gid = await _require_guild(interaction)
-        if gid is None:
-            return
-        text = await self.pipeline.set_affection(gid, value)
-        await interaction.response.send_message(text, ephemeral=True)
-
-    # ── teacher: clear group ────────────────────────────────
-
-    clear = app_commands.Group(name="clear", description="清除記憶／訊息／圖庫（僅管理者）")
 
     @clear.command(name="memory", description="清除本伺服器 bot 對話記憶")
     @owner_only()
     async def clear_memory(self, interaction: discord.Interaction) -> None:
-        gid = await _require_guild(interaction)
+        gid = await require_guild(interaction)
         if gid is None:
             return
         text = await self.pipeline.clear_memory(gid)
@@ -465,7 +333,7 @@ class SlashCog(commands.Cog):
     @clear.command(name="gallery", description="清除本伺服器 CG 資料庫紀錄")
     @owner_only()
     async def clear_gallery_cmd(self, interaction: discord.Interaction) -> None:
-        gid = await _require_guild(interaction)
+        gid = await require_guild(interaction)
         if gid is None:
             return
         text = await self.pipeline.clear_gallery(gid)
@@ -474,7 +342,7 @@ class SlashCog(commands.Cog):
     @clear.command(name="layers", description="清除老師叠加設定")
     @owner_only()
     async def clear_layers(self, interaction: discord.Interaction) -> None:
-        gid = await _require_guild(interaction)
+        gid = await require_guild(interaction)
         if gid is None:
             return
         text = await self.pipeline.clear_layers(gid)
@@ -505,9 +373,8 @@ class SlashCog(commands.Cog):
         if interaction.guild is None:
             await interaction.response.send_message("請在伺服器內使用。", ephemeral=True)
             return
-        # Default: all messages (matches former /clear channel)
         scope_value = scope.value if scope is not None else "all"
-        msg_id = await _parse_message_id(interaction, after_message_id)
+        msg_id = await parse_message_id(interaction, after_message_id)
         if msg_id is False:
             return
         await interaction.response.defer(ephemeral=True)
@@ -522,9 +389,11 @@ class SlashCog(commands.Cog):
         )
         await interaction.followup.send(text, ephemeral=True)
 
-    # ── teacher: mode / note ────────────────────────────────
+    # ── /mode ──────────────────────────────────────────────
 
-    mode = app_commands.Group(name="mode", description="回應模式／人設／老師設定（僅管理者）")
+    mode = app_commands.Group(
+        name="mode", description="回應模式／人設／老師設定（僅管理者）"
+    )
 
     @mode.command(name="lock", description="鎖定：只回應管理者／解除")
     @app_commands.describe(choice="開＝只回管理者；關＝可回其他人")
@@ -540,7 +409,7 @@ class SlashCog(commands.Cog):
         interaction: discord.Interaction,
         choice: app_commands.Choice[str],
     ) -> None:
-        gid = await _require_guild(interaction)
+        gid = await require_guild(interaction)
         if gid is None:
             return
         text = await self.pipeline.set_locked(gid, choice.value == "on")
@@ -560,7 +429,7 @@ class SlashCog(commands.Cog):
         interaction: discord.Interaction,
         choice: app_commands.Choice[str],
     ) -> None:
-        gid = await _require_guild(interaction)
+        gid = await require_guild(interaction)
         if gid is None:
             return
         text = await self.pipeline.set_work_mode(gid, choice.value == "work")
@@ -570,24 +439,12 @@ class SlashCog(commands.Cog):
     @app_commands.describe(text="要記下的設定內容")
     @owner_only()
     async def mode_note(self, interaction: discord.Interaction, text: str) -> None:
-        gid = await _require_guild(interaction)
+        gid = await require_guild(interaction)
         if gid is None:
             return
         reply = await self.pipeline.add_layer(gid, text)
         await interaction.response.send_message(reply, ephemeral=True)
 
-    async def cog_app_command_error(
-        self, interaction: discord.Interaction, error: app_commands.AppCommandError
-    ) -> None:
-        if isinstance(error, app_commands.CheckFailure):
-            msg = str(error) or "沒有權限使用這個指令。"
-            if interaction.response.is_done():
-                await interaction.followup.send(msg, ephemeral=True)
-            else:
-                await interaction.response.send_message(msg, ephemeral=True)
-            return
-        raise error
-
 
 async def setup(bot: commands.Bot) -> None:
-    await bot.add_cog(SlashCog(bot))
+    await bot.add_cog(AdminCog(bot))

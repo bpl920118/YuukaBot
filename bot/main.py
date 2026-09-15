@@ -12,6 +12,8 @@ from clients.webui import WebuiClient
 from clients.llm import LlmClient
 from db.repository import Repository
 
+COGS_DIR = Path(__file__).resolve().parent / "cogs"
+
 
 class YuukaBot(commands.Bot):
     def __init__(self) -> None:
@@ -32,9 +34,11 @@ class YuukaBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         await self.repo.init()
-        await self.load_extension("bot.cogs.slash")
-        await self.load_extension("bot.cogs.music")
-        await self.load_extension("bot.cogs.fanart")
+        # Auto-load every cog module under bot/cogs/ (skip _private helpers).
+        for path in sorted(COGS_DIR.glob("*.py")):
+            if path.name.startswith("_"):
+                continue
+            await self.load_extension(f"bot.cogs.{path.stem}")
 
 
 def strip_mentions(message: discord.Message, bot_user: discord.ClientUser) -> str:

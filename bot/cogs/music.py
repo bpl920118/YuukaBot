@@ -31,7 +31,11 @@ def _human_members(
 
 
 class MusicCog(commands.Cog):
-    """Voice music playback (YouTube / YouTube Music)."""
+    """語音音樂：全部收在 /music 底下。"""
+
+    music = app_commands.Group(
+        name="music", description="YouTube／YT Music 播放控制"
+    )
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -96,10 +100,8 @@ class MusicCog(commands.Cog):
         if bot_channel is None:
             return
 
-        # Only care about joins/leaves that affect the bot's channel.
         touched = {before.channel, after.channel}
         if bot_channel not in touched and member.id != self.bot.user_id:
-            # Still re-check if someone left bot channel (before.channel == bot)
             if before.channel != bot_channel and after.channel != bot_channel:
                 return
 
@@ -108,10 +110,7 @@ class MusicCog(commands.Cog):
         else:
             self._cancel_alone_leave(guild.id)
 
-    @app_commands.command(
-        name="play",
-        description="播放 YouTube／YT Music（連結、歌名或播放清單）",
-    )
+    @music.command(name="play", description="播放（連結、歌名或播放清單）")
     @app_commands.describe(query="影片／音樂連結、播放清單，或搜尋關鍵字")
     async def play(self, interaction: discord.Interaction, query: str) -> None:
         if interaction.guild is None:
@@ -121,7 +120,7 @@ class MusicCog(commands.Cog):
         channel = _voice_channel(interaction)
         if channel is None:
             await interaction.response.send_message(
-                "請先加入語音頻道再使用 `/play`。", ephemeral=True
+                "請先加入語音頻道再使用 `/music play`。", ephemeral=True
             )
             return
 
@@ -179,7 +178,7 @@ class MusicCog(commands.Cog):
                 f"（上限 {PLAYLIST_LIMIT}）。第一首：**{tracks[0].title}**"
             )
 
-    @app_commands.command(name="skip", description="跳過目前播放的歌曲")
+    @music.command(name="skip", description="跳過目前播放的歌曲")
     async def skip(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             await interaction.response.send_message("請在伺服器內使用。", ephemeral=True)
@@ -194,29 +193,26 @@ class MusicCog(commands.Cog):
         else:
             await interaction.response.send_message("已跳過。")
 
-    @app_commands.command(name="pause", description="暫停播放")
+    @music.command(name="pause", description="暫停／繼續（再按一次切換）")
     async def pause(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             await interaction.response.send_message("請在伺服器內使用。", ephemeral=True)
             return
         player = self._player(interaction.guild.id)
+        if player.is_paused:
+            if player.resume():
+                await interaction.response.send_message("繼續播放。")
+            else:
+                await interaction.response.send_message(
+                    "目前沒有暫停中的歌曲。", ephemeral=True
+                )
+            return
         if player.pause():
             await interaction.response.send_message("已暫停。")
         else:
             await interaction.response.send_message("現在沒有在播放。", ephemeral=True)
 
-    @app_commands.command(name="resume", description="繼續播放")
-    async def resume(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None:
-            await interaction.response.send_message("請在伺服器內使用。", ephemeral=True)
-            return
-        player = self._player(interaction.guild.id)
-        if player.resume():
-            await interaction.response.send_message("繼續播放。")
-        else:
-            await interaction.response.send_message("目前沒有暫停中的歌曲。", ephemeral=True)
-
-    @app_commands.command(name="stop", description="停止播放並清空佇列（仍留在語音）")
+    @music.command(name="stop", description="停止播放並清空佇列（仍留在語音）")
     async def stop(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             await interaction.response.send_message("請在伺服器內使用。", ephemeral=True)
@@ -225,7 +221,7 @@ class MusicCog(commands.Cog):
         await player.stop(leave=False)
         await interaction.response.send_message("已停止並清空佇列。")
 
-    @app_commands.command(name="leave", description="停止播放並離開語音頻道")
+    @music.command(name="leave", description="停止播放並離開語音頻道")
     async def leave(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             await interaction.response.send_message("請在伺服器內使用。", ephemeral=True)
@@ -234,7 +230,7 @@ class MusicCog(commands.Cog):
         await player.disconnect()
         await interaction.response.send_message("已離開語音頻道。")
 
-    @app_commands.command(name="queue", description="查看播放佇列")
+    @music.command(name="queue", description="查看目前曲目與播放佇列")
     async def queue_cmd(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             await interaction.response.send_message("請在伺服器內使用。", ephemeral=True)
@@ -242,9 +238,12 @@ class MusicCog(commands.Cog):
         player = self._player(interaction.guild.id)
         lines: list[str] = []
         if player.current:
+            status = "暫停中" if player.is_paused else "播放中"
             lines.append(
-                f"**目前：** {player.current.title}"
-                f"（{format_duration(player.current.duration)}）"
+                f"**目前（{status}）：** {player.current.title}"
+                f"（{format_duration(player.current.duration)}）\n"
+                f"{player.current.webpage_url}\n"
+                f"點歌：{player.current.requester_name}"
             )
         else:
             lines.append("**目前：** （無）")
@@ -263,23 +262,6 @@ class MusicCog(commands.Cog):
             if rest > 0:
                 lines.append(f"…還有 {rest} 首")
         await interaction.response.send_message("\n".join(lines))
-
-    @app_commands.command(name="nowplaying", description="顯示目前播放中的歌曲")
-    async def nowplaying(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None:
-            await interaction.response.send_message("請在伺服器內使用。", ephemeral=True)
-            return
-        player = self._player(interaction.guild.id)
-        cur = player.current
-        if cur is None:
-            await interaction.response.send_message("現在沒有在播放。", ephemeral=True)
-            return
-        status = "暫停中" if player.is_paused else "播放中"
-        await interaction.response.send_message(
-            f"**{status}：** {cur.title}（{format_duration(cur.duration)}）\n"
-            f"{cur.webpage_url}\n"
-            f"點歌：{cur.requester_name}"
-        )
 
 
 async def setup(bot: commands.Bot) -> None:

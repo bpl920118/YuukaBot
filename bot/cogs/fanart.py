@@ -8,6 +8,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from bot.checks import owner_only
+from bot.cogs._helpers import OwnerErrorMixin
 from bot.fanart.common import (
     DEFAULT_COPYRIGHTS,
     DEFAULT_EXCLUDE_TAGS,
@@ -38,8 +39,8 @@ def _ratings_from_setting(raw: str) -> frozenset[str]:
     return frozenset(letters) if letters else frozenset({"g"})
 
 
-class FanartCog(commands.Cog):
-    """Periodic Danbooru / Safebooru / Gelbooru / Pixiv → Discord."""
+class FanartCog(OwnerErrorMixin, commands.Cog):
+    """二創轉發：全部收在 /fanart 底下。"""
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
