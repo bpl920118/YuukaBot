@@ -5,7 +5,7 @@ mkdir -p "$STATE_DIR"
 OUT=$(/workspace/YuukaBot/scripts/yuuka_autopull.sh 2>&1)
 EC=$?
 echo "$OUT" >> "$STATE_DIR/autopull.cron.log"
-if echo "$OUT" | grep -qE 'NOTIFY_'; then
+if echo "$OUT" | grep -qE 'NOTIFY_AUTOPULL_FAIL|NOTIFY_.*FAIL'; then
   {
     echo "==== $(date -u +%Y-%m-%dT%H:%M:%SZ) autopull ec=$EC ===="
     echo "$OUT"

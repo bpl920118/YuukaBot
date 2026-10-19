@@ -53,7 +53,7 @@ restart_bot() {
   done
   sleep 1
   : > "$LOG"
-  tmux new-session -d -s "$SESSION" "cd '$ROOT' && source .venv/bin/activate && python -u run.py 2>&1 | tee -a '$LOG'"
+  tmux new-session -d -s "$SESSION" "cd '$ROOT' && unset DISCORD_TOKEN YUUKA_DISCORD_TOKEN && source .venv/bin/activate && env -u DISCORD_TOKEN -u YUUKA_DISCORD_TOKEN python -u run.py 2>&1 | tee -a '$LOG'"
   sleep 8
 }
 
@@ -70,9 +70,8 @@ if healthy; then
   echo "OK $NOW process+logged_in bot=$(bot_name_from_log)"
   echo "MANUAL: 請在 Discord 打 /ping 確認延遲"
   if [[ "$LAST_DAY" != "$DAY" ]]; then
-    echo "NOTIFY_DAILY_OK day=$DAY bot=$(bot_name_from_log) still alive"
+    echo "LOG_DAILY_OK day=$DAY bot=$(bot_name_from_log) still alive"
     echo "$DAY" > "$LAST_DAY_FILE"
-    exit 10
   fi
   exit 0
 fi
@@ -99,9 +98,8 @@ done
 
 NAME="$(bot_name_from_log)"
 if (( success == 1 )); then
-  echo "NOTIFY_RESTARTED time=$NOW symptom=$SYMPTOM attempts=$attempt bot=$NAME ok=1"
-  echo "MANUAL: 請在 Discord 打 /ping 確認延遲"
-  exit 11
+  echo "LOG_RESTARTED time=$NOW symptom=$SYMPTOM attempts=$attempt bot=$NAME ok=1"
+  exit 0
 fi
 
 echo "NOTIFY_RESTART_FAILED time=$NOW symptom=$SYMPTOM attempts=$attempt bot=$NAME"

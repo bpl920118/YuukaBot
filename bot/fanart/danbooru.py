@@ -83,8 +83,11 @@ class DanbooruClient:
 def build_search_tags(copyright: str = "", rating_tag: str = "rating:g") -> str:
     rating_tag = (rating_tag or "rating:g").strip() or "rating:g"
     copyright = (copyright or "").strip()
+    # Include order:score so pagination walks high-score posts. Without it,
+    # newest pages are mostly score 0–5 and min_score filters them all out.
+    # Live Danbooru accepts this 3-tag query for anon clients.
     if copyright:
-        return f"{copyright} {rating_tag}"
+        return f"{copyright} {rating_tag} order:score"
     return f"{rating_tag} order:score"
 
 

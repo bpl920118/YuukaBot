@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import random
+
 import io
 import logging
 
@@ -183,28 +185,62 @@ class FanartCog(OwnerErrorMixin, commands.Cog):
         if sources == ["pixiv"]:
             return await self._poll_pixiv(channel)
 
-        # Rotate booru sources; if one yields 0, try the next once.
+        # Keep trying sources + different game tags until something posts.
+        # Danbooru 500 / empty results must not abort the whole poll.
         n = len(sources)
-        for i in range(n):
-            name = sources[(self._source_rot + i) % n]
-            posted = await self._poll_booru(channel, name)
+        games = self._copyrights()
+        max_rounds = max(n * 3, 6)
+        if games:
+            max_rounds = max(max_rounds, min(len(games), 12))
+        for attempt in range(max_rounds):
+            name = sources[(self._source_rot + attempt) % n]
+            copyright = random.choice(games) if games else ""
+            posted = await self._poll_booru(channel, name, copyright=copyright)
             if posted > 0:
-                self._source_rot = (self._source_rot + i + 1) % n
+                self._source_rot = (self._source_rot + attempt + 1) % n
+                log.info(
+                    "fanart posted=%s via %s copyright=%r attempt=%s/%s",
+                    posted,
+                    name,
+                    copyright,
+                    attempt + 1,
+                    max_rounds,
+                )
                 return posted
+            log.info(
+                "fanart miss via %s copyright=%r attempt=%s/%s — keep trying",
+                name,
+                copyright,
+                attempt + 1,
+                max_rounds,
+            )
         self._source_rot = (self._source_rot + 1) % max(n, 1)
+        log.warning("fanart: all %s attempts failed this poll", max_rounds)
         return 0
 
-    async def _poll_booru(self, channel: discord.TextChannel, name: str) -> int:
+    async def _poll_booru(
+        self,
+        channel: discord.TextChannel,
+        name: str,
+        *,
+        copyright: str = "",
+    ) -> int:
         s = get_settings()
         repo = self.bot.repo  # type: ignore[attr-defined]
+        games = self._copyrights()
+        # Prefer caller-provided copyright; otherwise pick one for whitelist match.
+        copyright = (copyright or "").strip() or (
+            random.choice(games) if games else ""
+        )
+
         if name == "danbooru":
             client: DanbooruClient | SafebooruClient | GelbooruClient = DanbooruClient()
             query = s.fanart_danbooru_tags.strip() or build_search_tags(
-                "", s.fanart_danbooru_rating
+                copyright, s.fanart_danbooru_rating
             )
         elif name == "safebooru":
             client = SafebooruClient()
-            query = build_safebooru_tags()
+            query = build_safebooru_tags(copyright)
         elif name == "gelbooru":
             client = GelbooruClient(
                 api_key=s.fanart_gelbooru_api_key,
@@ -212,11 +248,9 @@ class FanartCog(OwnerErrorMixin, commands.Cog):
             )
             if not client.configured:
                 return 0
-            query = build_gelbooru_tags(True)
+            query = build_gelbooru_tags(True, copyright)
         else:
             return 0
-
-        games = self._copyrights()
         allowed = frozenset(games)
         allowed_ratings = _ratings_from_setting(s.fanart_danbooru_rating)
         min_score = int(s.fanart_danbooru_min_score or 0)
@@ -247,6 +281,9 @@ class FanartCog(OwnerErrorMixin, commands.Cog):
             if unseen:
                 break
             if not raw_items:
+                # Empty page usually means API error / exhausted — stop this source
+                # immediately so the poll can try another source/tag.
+                log.info("fanart %s: empty search query=%r page=%s", name, query, page)
                 self._score_page[name] = 1
                 break
             self._score_page[name] = page + 1

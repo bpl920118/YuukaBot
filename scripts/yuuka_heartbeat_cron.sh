@@ -5,7 +5,7 @@ mkdir -p "$STATE_DIR"
 OUT=$(/workspace/YuukaBot/scripts/yuuka_heartbeat.sh 2>&1)
 EC=$?
 echo "$OUT" >> "$STATE_DIR/heartbeat.cron.log"
-if echo "$OUT" | grep -qE 'NOTIFY_'; then
+if echo "$OUT" | grep -qE 'NOTIFY_.*(FAIL|FAILED)|NOTIFY_RESTART_FAILED'; then
   {
     echo "==== $(date -u +%Y-%m-%dT%H:%M:%SZ) heartbeat ec=$EC ===="
     echo "$OUT"

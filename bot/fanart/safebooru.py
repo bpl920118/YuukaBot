@@ -84,8 +84,11 @@ class SafebooruClient:
         return resp.content, guess_media_ext(image_url, ctype)
 
 
-def build_safebooru_tags() -> str:
-    # Site is SFW-oriented; sort by score across all time.
+def build_safebooru_tags(copyright: str = "") -> str:
+    # Site is SFW-oriented; include a game copyright so whitelist filter can pass.
+    copyright = (copyright or "").strip()
+    if copyright:
+        return f"{copyright} sort:score"
     return "sort:score"
 
 

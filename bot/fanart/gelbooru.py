@@ -92,11 +92,16 @@ class GelbooruClient:
         return await _download(image_url, self._timeout)
 
 
-def build_gelbooru_tags(rating_general: bool = True) -> str:
+def build_gelbooru_tags(rating_general: bool = True, copyright: str = "") -> str:
     # Gelbooru allows more tags than Danbooru anon; keep safe + score sort.
+    copyright = (copyright or "").strip()
+    parts: list[str] = []
     if rating_general:
-        return "rating:general sort:score:desc"
-    return "sort:score:desc"
+        parts.append("rating:general")
+    if copyright:
+        parts.append(copyright)
+    parts.append("sort:score:desc")
+    return " ".join(parts)
 
 
 def _extract_rows(payload: object) -> list[dict]:

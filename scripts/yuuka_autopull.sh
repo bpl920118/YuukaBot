@@ -31,7 +31,7 @@ if [[ -n "$DIRTY" ]]; then
     echo "QUIET dirty unchanged (already notified today)"
     exit 0
   fi
-  echo "NOTIFY_AUTOPULL_DIRTY time=$(ts)"
+  echo "LOG_AUTOPULL_DIRTY time=$(ts)"
   echo "STATUS:"
   git status --short
   echo "STOPPED: dirty tracked files — waiting for manual instruction (no reset --hard)"
@@ -141,7 +141,7 @@ pgrep -af 'python.*run\.py' 2>/dev/null | grep -F "$ROOT" | grep -v grep | awk '
 done
 sleep 1
 : > "$LOG"
-tmux new-session -d -s "$SESSION" "cd '$ROOT' && source .venv/bin/activate && python -u run.py 2>&1 | tee -a '$LOG'"
+tmux new-session -d -s "$SESSION" "cd '$ROOT' && unset DISCORD_TOKEN YUUKA_DISCORD_TOKEN && source .venv/bin/activate && env -u DISCORD_TOKEN -u YUUKA_DISCORD_TOKEN python -u run.py 2>&1 | tee -a '$LOG'"
 sleep 8
 
 login_ok=0
@@ -155,7 +155,7 @@ if echo "$blob" | grep -q 'Logged in as '; then
 fi
 BOT="$(echo "$blob" | grep -oE 'Logged in as [^[:cntrl:]]+' | tail -n1 | sed 's/Logged in as //' || echo unknown)"
 
-echo "NOTIFY_AUTOPULL_UPDATED time=$(ts)"
+echo "LOG_AUTOPULL_UPDATED time=$(ts)"
 echo "OLD_SHA=$OLD_SHA"
 echo "NEW_SHA=$ACTUAL_NEW"
 echo "UPSTREAM=$UPSTREAM"
