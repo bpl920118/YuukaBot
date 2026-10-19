@@ -4,13 +4,6 @@ from core.character import load_system_prompt, match_lorebook
 from core.schemas import build_runtime_system
 
 
-def test_local_prompt_preferred_in_home_mode() -> None:
-    full = load_system_prompt("yuuka", home_mode=False)
-    local = load_system_prompt("yuuka", home_mode=True)
-    assert "早瀨優香" in local
-    assert len(local) < len(full)
-
-
 def test_lore_scans_recent_blob() -> None:
     # Key only in "history" portion of scan text
     out = match_lorebook(

@@ -12,7 +12,7 @@ from bot.cogs._helpers import OwnerErrorMixin, parse_message_id, require_guild
 
 
 class AdminCog(OwnerErrorMixin, commands.Cog):
-    """管理者指令：LLM／生圖／VRAM／清除／人設模式。"""
+    """管理者指令：LLM／生圖／清除／人設模式。"""
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -276,44 +276,6 @@ class AdminCog(OwnerErrorMixin, commands.Cog):
             }:
                 files.append(discord.File(path, filename=path.name))
         await interaction.followup.send(result["reply"], files=files)
-
-    # ── /vram ──────────────────────────────────────────────
-
-    vram = app_commands.Group(
-        name="vram",
-        description="家用文字 LLM／生圖 VRAM 切換（僅管理者）",
-    )
-
-    @vram.command(name="status", description="查看 VRAM agent／Kobold／WebUI 狀態")
-    @owner_only()
-    async def vram_status(self, interaction: discord.Interaction) -> None:
-        gid = await require_guild(interaction)
-        if gid is None:
-            return
-        await interaction.response.defer(ephemeral=True)
-        text = await self.pipeline.describe_vram(gid)
-        await interaction.followup.send(text, ephemeral=True)
-
-    @vram.command(name="switch", description="切換：生圖 或 文字 LLM")
-    @app_commands.describe(mode="要留給哪邊用 VRAM")
-    @app_commands.choices(
-        mode=[
-            app_commands.Choice(name="生圖（關 Kobold、開 WebUI）", value="sd"),
-            app_commands.Choice(name="文字 LLM（可關 WebUI、開 Kobold）", value="llm"),
-        ]
-    )
-    @owner_only()
-    async def vram_switch(
-        self,
-        interaction: discord.Interaction,
-        mode: app_commands.Choice[str],
-    ) -> None:
-        gid = await require_guild(interaction)
-        if gid is None:
-            return
-        await interaction.response.defer(ephemeral=True)
-        text = await self.pipeline.vram_switch_mode(mode.value)
-        await interaction.followup.send(text, ephemeral=True)
 
     # ── /clear ─────────────────────────────────────────────
 

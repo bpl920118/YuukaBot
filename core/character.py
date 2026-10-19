@@ -17,15 +17,8 @@ def load_character(character_id: str = "yuuka") -> dict[str, Any]:
 
 
 def load_system_prompt(character_id: str = "yuuka", *, home_mode: bool = False) -> str:
-    """Load always-on character card text (tavern-style sections in .txt).
-
-    home_mode prefers ``{id}-system-prompt.local.txt`` (ST-tuned short card for 7B).
-    """
+    """Load always-on character card text (tavern-style sections in .txt)."""
     settings = get_settings()
-    if home_mode:
-        local_path = settings.character_dir / f"{character_id}-system-prompt.local.txt"
-        if local_path.exists():
-            return local_path.read_text(encoding="utf-8").strip()
     prompt_path = settings.character_dir / f"{character_id}-system-prompt.txt"
     if prompt_path.exists():
         return prompt_path.read_text(encoding="utf-8").strip()

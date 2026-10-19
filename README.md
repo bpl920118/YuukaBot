@@ -66,7 +66,6 @@ Discord Developer Portal 請開啟 **Message Content Intent**。
 | `/api immersion` | DeepSeek 角色沉浸開關 |
 | `/api url` · `/api key` · `/api clear` | 進階覆寫／清回 `.env` |
 | `/image status` · `url` · `off` · `test` · `force` | 生圖連線與強制出圖 |
-| `/vram status` · `/vram switch` | 家用 GPU：文字 LLM ↔ 生圖 |
 | `/clear memory` · `gallery` · `layers` | 清記憶／圖庫／老師設定 |
 | `/clear messages` | 刪本頻道訊息（`scope`＝全部或只刪 bot） |
 | `/mode lock` | 只回管理者／解除（`on`／`off`） |

@@ -184,3 +184,30 @@ def test_empty_no_failover_without_gemini_key(monkeypatch) -> None:
     assert is_soft_fallback(data["reply"])
     assert len(urls) == 4
     assert all("deepseek" in u for u in urls)
+
+
+def test_extract_json_allows_literal_newlines() -> None:
+    raw = '{\n  "reply": "這是第一行\\n這是第二行\\n```python\\ndef foo():\\n    return 1\\n```",\n  "emotion": "proud"\n}'
+    data = LlmClient._extract_json(raw)
+    assert data["emotion"] == "proud"
+    assert "def foo():" in data["reply"]
+
+
+def test_extract_json_literal_control_characters() -> None:
+    # Simulates LLM output with unescaped literal newline inside JSON string
+    raw = '{\n  "reply": "這是我寫的程式碼：\n```python\nprint(1)\n```\n完美～與計算一致。",\n  "emotion": "proud"\n}'
+    data = LlmClient._extract_json(raw)
+    assert data["emotion"] == "proud"
+    assert "print(1)" in data["reply"]
+
+
+def test_salvage_reply_with_internal_quotes_and_code() -> None:
+    from clients.llm import _salvage_reply_field
+
+    # Simulates broken JSON where unescaped quotes inside python code break strict json.loads
+    raw = '{\n  "reply": "這是演算法：\n```python\nprint("hello")\n```\n計算完成。",\n  "emotion": "proud",\n  "trigger_cg": false\n}'
+    salvaged = _salvage_reply_field(raw)
+    assert salvaged is not None
+    assert "print" in salvaged["reply"]
+    assert salvaged["emotion"] == "proud"
+

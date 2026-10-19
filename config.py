@@ -79,18 +79,6 @@ class Settings(BaseSettings):
     lore_max_chars: int = 900
     memory_summary_max_chars: int = 400
 
-    # Home VRAM agent (scripts/home_vram_agent.py on the PC with Kobold+WebUI).
-    # Example local: http://127.0.0.1:5010  | Tailscale: http://100.x.y.z:5010
-    home_vram_agent_url: str = ""
-    home_vram_agent_token: str = "yuuka-local"
-    home_vram_agent_timeout: int = 240
-    # After CG, ask agent to bring text LLM back (agent may stop WebUI).
-    home_vram_reload_llm: bool = True
-    # Kept for .env compatibility; reload follows home_vram_reload_llm.
-    home_vram_reload_llm_always: bool = True
-    # Home-LLM chat: if Kobold was stopped for CG, auto switch back before reply.
-    home_vram_ensure_llm_on_chat: bool = True
-
     # --- Fanart auto-forward (optional) ---
     # Set FANART_CHANNEL_ID to enable; leave 0 to disable the loop.
     fanart_channel_id: int = 0

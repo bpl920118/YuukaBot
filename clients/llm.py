@@ -110,18 +110,37 @@ def _salvage_reply_field(raw: str) -> dict[str, Any] | None:
     if not text:
         return None
     match = re.search(r'"reply"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
-    if not match:
+    content: str | None = None
+    if match:
+        content = match.group(1)
+    else:
+        relaxed = re.search(
+            r'"reply"\s*:\s*"(.*?)(?:"\s*,\s*"(?:emotion|trigger_cg|cg_tier|cg_scene|image_prompt|user_note)"|\s*"\s*\}\s*$)',
+            text,
+            re.DOTALL,
+        )
+        if relaxed:
+            content = relaxed.group(1)
+
+    if not content:
         return None
+
     try:
-        reply = json.loads(f'"{match.group(1)}"')
+        reply = json.loads(f'"{content}"', strict=False)
     except json.JSONDecodeError:
-        reply = match.group(1)
+        reply = content.replace(r'\"', '"').replace(r'\n', '\n')
     reply = (reply or "").strip()
     if len(reply) < 2:
         return None
+
+    emotion = "neutral"
+    emo_match = re.search(r'"emotion"\s*:\s*"([a-zA-Z_-]+)"', text)
+    if emo_match:
+        emotion = emo_match.group(1).strip()
+
     return {
         "reply": reply[:8000],
-        "emotion": "neutral",
+        "emotion": emotion,
         "trigger_cg": False,
         "cg_tier": "none",
         "cg_scene": None,
@@ -611,14 +630,33 @@ class LlmClient:
 
     @staticmethod
     def _extract_json(raw: str) -> dict[str, Any]:
-        raw = _strip_think_blocks(raw)
-        if raw.startswith("```"):
-            raw = re.sub(r"^```(?:json)?\s*", "", raw)
-            raw = re.sub(r"\s*```$", "", raw)
+        text = _strip_think_blocks(raw).strip()
+        fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+        if fence_match:
+            try:
+                return json.loads(fence_match.group(1), strict=False)
+            except Exception:
+                pass
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text)
+            text = re.sub(r"\s*```$", "", text).strip()
+
         try:
-            return json.loads(raw)
+            return json.loads(text, strict=False)
         except json.JSONDecodeError:
-            match = re.search(r"\{.*\}", raw, re.DOTALL)
-            if not match:
-                raise
-            return json.loads(match.group(0))
+            pass
+
+        start = text.find("{")
+        if start != -1:
+            try:
+                dec = json.JSONDecoder(strict=False)
+                obj, _ = dec.raw_decode(text[start:])
+                if isinstance(obj, dict):
+                    return obj
+            except Exception:
+                pass
+
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            raise json.JSONDecodeError("No JSON object found", text, 0)
+        return json.loads(match.group(0), strict=False)
