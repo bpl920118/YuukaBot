@@ -353,13 +353,13 @@ class ChatPipeline:
         should_search = (force_search or is_search_intent(text)) and not image_data_uris
         if should_search:
             gemini_key = None
-            gemini_model = "gemini-2.5-flash"
+            gemini_model = "gemini-3.8-flash"
             if detect_provider(base_url) == "gemini" and api_key:
                 gemini_key = api_key
-                gemini_model = model or "gemini-2.5-flash"
+                gemini_model = model or "gemini-3.8-flash"
             elif settings.gemini_api_key:
                 gemini_key = settings.gemini_api_key
-                gemini_model = settings.gemini_model or "gemini-2.5-flash"
+                gemini_model = settings.gemini_model or "gemini-3.8-flash"
 
             if gemini_key:
                 try:

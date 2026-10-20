@@ -61,17 +61,20 @@ class GeneralCog(OwnerErrorMixin, commands.Cog):
         if gid is None:
             return
         await interaction.response.defer(thinking=True)
-        result = await self.pipeline.handle(
-            guild_id=gid,
-            user_id=interaction.user.id,
-            display_name=interaction.user.display_name,
-            text=query,
-            is_owner=(interaction.user.id == self.settings.teacher_user_id),
-            force_search=True,
-        )
-        reply = result.get("reply") or "……沒有找到相關資訊呢。"
-        reply_text = reply[:2000] if len(reply) > 2000 else reply
-        await interaction.followup.send(reply_text)
+        try:
+            result = await self.pipeline.handle(
+                guild_id=gid,
+                user_id=interaction.user.id,
+                display_name=interaction.user.display_name,
+                text=query,
+                is_owner=(interaction.user.id == self.settings.teacher_user_id),
+                force_search=True,
+            )
+            reply = result.get("reply") or "……沒有找到相關資訊呢。"
+            reply_text = reply[:2000] if len(reply) > 2000 else reply
+            await interaction.followup.send(reply_text)
+        except Exception as exc:
+            await interaction.followup.send(f"……搜尋處理出錯了：`{exc}`")
 
     @app_commands.command(name="gallery", description="查看本伺服器最近的 CG")
     async def gallery(self, interaction: discord.Interaction) -> None:
