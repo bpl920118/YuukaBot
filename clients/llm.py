@@ -623,7 +623,11 @@ class LlmClient:
     ) -> str:
         """Call Gemini native generateContent endpoint with Google Search grounding."""
         use_model = model or "gemini-3.8-flash"
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{use_model}:generateContent?key={api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{use_model}:generateContent"
+        headers = {
+            "x-goog-api-key": api_key,
+            "Content-Type": "application/json",
+        }
         payload = {
             "system_instruction": {"parts": [{"text": system}]},
             "contents": [
@@ -632,7 +636,7 @@ class LlmClient:
             "tools": [{"google_search": {}}],
         }
         async with httpx.AsyncClient(timeout=45.0) as client:
-            resp = await client.post(url, json=payload)
+            resp = await client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
             data = resp.json()
         cand = (data.get("candidates") or [{}])[0]
