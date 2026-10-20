@@ -613,6 +613,33 @@ class LlmClient:
             )
         return text
 
+    async def chat_gemini_search(
+        self,
+        *,
+        system: str,
+        query: str,
+        api_key: str,
+        model: str,
+    ) -> str:
+        """Call Gemini native generateContent endpoint with Google Search grounding."""
+        use_model = model or "gemini-3.8-flash"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{use_model}:generateContent?key={api_key}"
+        payload = {
+            "system_instruction": {"parts": [{"text": system}]},
+            "contents": [
+                {"role": "user", "parts": [{"text": query}]}
+            ],
+            "tools": [{"google_search": {}}],
+        }
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            resp = await client.post(url, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+        cand = (data.get("candidates") or [{}])[0]
+        parts = (cand.get("content") or {}).get("parts") or []
+        text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+        return text
+
     def parse_result(self, raw: str) -> LlmChatResult:
         try:
             return LlmChatResult.model_validate(self._extract_json(raw))

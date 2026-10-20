@@ -50,6 +50,26 @@ from clients.webui import WebuiClient, normalize_webui_url
 from clients.llm import LlmClient, is_near_duplicate
 from db.repository import Repository
 
+def is_search_intent(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return False
+    triggers = (
+        "查一下",
+        "幫我查",
+        "搜尋",
+        "查看看",
+        "天氣",
+        "新聞",
+        "匯率",
+        "股價",
+        "最新消息",
+        "最新活動",
+        "今天幾號",
+    )
+    return any(kw in t for kw in triggers)
+
+
 
 def _env_default_base(settings) -> str:
     return default_base_url(
@@ -206,6 +226,7 @@ class ChatPipeline:
         display_name: str,
         text: str,
         is_owner: bool,
+        image_data_uris: list[str] | None = None,
     ) -> dict:
         settings = get_settings()
         guild_settings = await self.repo.get_or_create_settings(guild_id)
@@ -257,15 +278,18 @@ class ChatPipeline:
                 messages.append({"role": "assistant", "content": m.content})
                 last_assistant_reply = m.content or last_assistant_reply
 
-        messages.append(
-            {
-                "role": "user",
-                "content": _user_message_payload(
-                    user_id=user_id,
-                    text=text if text.strip() else "（只呼叫了你）",
-                ),
-            }
+        user_text = _user_message_payload(
+            user_id=user_id,
+            text=text if text.strip() else ("（向你展示了這張圖片，請你看一下）" if image_data_uris else "（只呼叫了你）"),
         )
+        if image_data_uris:
+            user_content = [
+                {"type": "text", "text": user_text},
+                *[{"type": "image_url", "image_url": {"url": u}} for u in image_data_uris],
+            ]
+            messages.append({"role": "user", "content": user_content})
+        else:
+            messages.append({"role": "user", "content": user_text})
 
         recent_for_scan = [
             m.content
@@ -319,15 +343,29 @@ class ChatPipeline:
             base_url
         ):
             apply_immersion_marker(messages)
-        raw = await self.llm.chat(
-            system=system,
-            messages=messages,
-            model=model,
-            depth=depth,
-            last_reply=last_assistant_reply or None,
-            api_key=api_key,
-            base_url=base_url,
-        )
+        search_used = False
+        if is_search_intent(text) and detect_provider(base_url) == "gemini" and not image_data_uris:
+            try:
+                raw = await self.llm.chat_gemini_search(
+                    system=system,
+                    query=user_text,
+                    api_key=api_key,
+                    model=model,
+                )
+                search_used = bool((raw or "").strip())
+            except Exception:
+                search_used = False
+
+        if not search_used:
+            raw = await self.llm.chat(
+                system=system,
+                messages=messages,
+                model=model,
+                depth=depth,
+                last_reply=last_assistant_reply or None,
+                api_key=api_key,
+                base_url=base_url,
+            )
         result = self.llm.parse_result(raw)
         result.reply = scrub_score_leak(result.reply)
 
@@ -361,10 +399,13 @@ class ChatPipeline:
                 "pending_cg": None,
             }
 
+        db_saved_text = text or "（呼叫）"
+        if image_data_uris:
+            db_saved_text = f"{text} [附帶圖片]" if text.strip() else "（向你展示了圖片）"
         await self.repo.add_message(
             guild_id=guild_id,
             role="user",
-            content=text or "（呼叫）",
+            content=db_saved_text,
             user_id=user_id,
             display_name=display_name,
             character_id=self.character_id,
