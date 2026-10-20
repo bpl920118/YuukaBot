@@ -51,6 +51,28 @@ class GeneralCog(OwnerErrorMixin, commands.Cog):
         )
         await interaction.followup.send(result["reply"])
 
+    @app_commands.command(
+        name="search",
+        description="讓優香透過 Google 搜尋即時資訊並回答（例如匯率、天氣、最新活動等）",
+    )
+    @app_commands.describe(query="想查詢的問題或內容（例如：日圓匯率、今天台北天氣、蔚藍檔案活動）")
+    async def search(self, interaction: discord.Interaction, query: str) -> None:
+        gid = await require_guild(interaction)
+        if gid is None:
+            return
+        await interaction.response.defer(thinking=True)
+        result = await self.pipeline.handle(
+            guild_id=gid,
+            user_id=interaction.user.id,
+            display_name=interaction.user.display_name,
+            text=query,
+            is_owner=(interaction.user.id == self.settings.teacher_user_id),
+            force_search=True,
+        )
+        reply = result.get("reply") or "……沒有找到相關資訊呢。"
+        reply_text = reply[:2000] if len(reply) > 2000 else reply
+        await interaction.followup.send(reply_text)
+
     @app_commands.command(name="gallery", description="查看本伺服器最近的 CG")
     async def gallery(self, interaction: discord.Interaction) -> None:
         gid = await require_guild(interaction)

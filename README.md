@@ -49,6 +49,8 @@ Discord Developer Portal 請開啟 **Message Content Intent**。
 
 | 指令 | 說明 |
 |------|------|
+| `/search` | 讓優香透過 Google 搜尋即時資訊並回答（匯率、天氣、活動等） |
+| `/checkin` | 每日簽到 |
 | `/gallery` | 本伺服器最近 CG |
 | `/ping` | 測試機器人是否在線 |
 | `/score show` | 查看共用好感與生圖門檻（僅自己可見） |

@@ -59,6 +59,10 @@ def is_search_intent(text: str) -> bool:
         "幫我查",
         "搜尋",
         "查看看",
+        "查詢",
+        "找一下",
+        "找看看",
+        "幫我找",
         "天氣",
         "新聞",
         "匯率",
@@ -66,6 +70,7 @@ def is_search_intent(text: str) -> bool:
         "最新消息",
         "最新活動",
         "今天幾號",
+        "即時",
     )
     return any(kw in t for kw in triggers)
 
@@ -227,6 +232,7 @@ class ChatPipeline:
         text: str,
         is_owner: bool,
         image_data_uris: list[str] | None = None,
+        force_search: bool = False,
     ) -> dict:
         settings = get_settings()
         guild_settings = await self.repo.get_or_create_settings(guild_id)
@@ -344,17 +350,42 @@ class ChatPipeline:
         ):
             apply_immersion_marker(messages)
         search_used = False
-        if is_search_intent(text) and detect_provider(base_url) == "gemini" and not image_data_uris:
-            try:
-                raw = await self.llm.chat_gemini_search(
-                    system=system,
-                    query=user_text,
-                    api_key=api_key,
-                    model=model,
-                )
-                search_used = bool((raw or "").strip())
-            except Exception:
-                search_used = False
+        should_search = (force_search or is_search_intent(text)) and not image_data_uris
+        if should_search:
+            gemini_key = None
+            gemini_model = "gemini-2.5-flash"
+            if detect_provider(base_url) == "gemini" and api_key:
+                gemini_key = api_key
+                gemini_model = model or "gemini-2.5-flash"
+            elif settings.gemini_api_key:
+                gemini_key = settings.gemini_api_key
+                gemini_model = settings.gemini_model or "gemini-2.5-flash"
+
+            if gemini_key:
+                try:
+                    raw = await self.llm.chat_gemini_search(
+                        system=system,
+                        query=user_text,
+                        api_key=gemini_key,
+                        model=gemini_model,
+                    )
+                    search_used = bool((raw or "").strip())
+                except Exception as exc:
+                    search_used = False
+                    if force_search:
+                        return {
+                            "reply": f"……唔，搜尋時出了一點狀況（`{exc}`）。請老師稍後再試一次！",
+                            "emotion": "flustered",
+                            "image_path": None,
+                            "pending_cg": None,
+                        }
+            elif force_search:
+                return {
+                    "reply": "老師，即時搜尋需要 Google Gemini 支援喔！請先在 `.env` 設定 `GEMINI_API_KEY`，或是使用 `/api switch gemini` 切換至 Gemini。",
+                    "emotion": "flustered",
+                    "image_path": None,
+                    "pending_cg": None,
+                }
 
         if not search_used:
             raw = await self.llm.chat(
