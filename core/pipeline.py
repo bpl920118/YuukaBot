@@ -363,9 +363,13 @@ class ChatPipeline:
 
             if gemini_key:
                 try:
+                    if force_search:
+                        search_query = f"（系統提示：老師使用了 /search 搜尋功能，請透過 Google Search 搜尋關於「{text}」的最新資訊，並以早瀨優香的身份回覆老師）\n{user_text}"
+                    else:
+                        search_query = user_text
                     raw = await self.llm.chat_gemini_search(
                         system=system,
-                        query=user_text,
+                        query=search_query,
                         api_key=gemini_key,
                         model=gemini_model,
                     )
